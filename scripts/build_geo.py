@@ -280,7 +280,28 @@ def main():
     big.save(ROOT / "data/work/political_16k.png", compress_level=1)   # build_imagery.py 压成 political.ktx
 
     build_cities(countries)
+    build_marine()
     build_height()
+
+
+def build_marine():
+    """海洋、海、湾、海峡名：标签点取多边形内部点，名称转简体"""
+    from opencc import OpenCC
+    t2s = OpenCC("t2s").convert
+    r = shapefile.Reader(str(RAW / "marine/ne_10m_geography_marine_polys.shp"), encoding="utf-8")
+    out = []
+    for sr in r.iterShapeRecords():
+        rec = sr.record.as_dict()
+        name = t2s(rec["name_zh"] or "")
+        if not name or rec["featurecla"] in ("river", "reef", "lagoon", "inlet"):
+            continue
+        g = shape(sr.shape.__geo_interface__).buffer(0)
+        pt = max(polys(g), key=lambda p: p.area).representative_point()
+        out.append({"name": name, "lon": round(pt.x, 3), "lat": round(pt.y, 3), "kind": rec["featurecla"],
+                    "minLabel": rec["min_label"], "rank": rec["scalerank"], "area": round(km2(g))})
+    out.sort(key=lambda m: (m["rank"], -m["area"]))
+    (OUT / "marine.json").write_text(json.dumps(out, ensure_ascii=False, separators=(",", ":")))
+    print(f"{len(out)} marine labels", file=sys.stderr)
 
 
 def build_cities(countries):

@@ -10,7 +10,7 @@ import subprocess, sys
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter
 
 Image.MAX_IMAGE_PIXELS = None
 ROOT = Path(__file__).resolve().parent.parent
@@ -90,9 +90,69 @@ def compress(src, dst):
                     "--wrap_mode=Repeat", f"--output={dst}", str(src)], check=True)
 
 
+# 复古地球仪配色（参照焦糖皮面地球仪）
+V_OCEAN = (203, 142, 88)
+V_LAND = (132, 78, 47)
+V_LINE = (232, 188, 136)
+
+
+def vintage():
+    """复古底图：焦糖海、深棕陆地、海岸外几圈水纹线、经纬网、皮面细纹"""
+    pol = np.asarray(Image.open(WORK / "political_16k.png").convert("RGB"))
+    land = ~((pol[..., 0] == 0xAA) & (pol[..., 1] == 0xD3) & (pol[..., 2] == 0xEC))
+    del pol
+    land_img = Image.fromarray((land * 255).astype(np.uint8))
+
+    # 海岸外的水纹：在 8K 上模糊陆地掩膜，取几条等值线，再放大回 16K
+    small = land_img.resize((8192, 4096), Image.BILINEAR)
+    rings = np.zeros((4096, 8192), dtype=np.float32)
+    for radius, t, w in [(5, 0.30, 0.035), (12, 0.16, 0.022), (22, 0.10, 0.015)]:
+        b = np.asarray(small.filter(ImageFilter.GaussianBlur(radius)), dtype=np.float32) / 255
+        rings = np.maximum(rings, np.clip(1 - np.abs(b - t) / w, 0, 1))
+    rings_big = np.asarray(Image.fromarray((rings * 255).astype(np.uint8)).resize((W, H), Image.BILINEAR), dtype=np.float32) / 255
+    rings_big[land] = 0
+
+    # 皮面细纹：几层随机噪声叠加
+    rnd = np.random.default_rng(3)
+    grain = np.zeros((H, W), dtype=np.float32)
+    for size, amp in [(256, 7), (1024, 5), (4096, 3)]:
+        n = rnd.standard_normal((size // 2, size)).astype(np.float32)
+        grain += np.asarray(Image.fromarray(((n * 40) + 128).clip(0, 255).astype(np.uint8)).resize((W, H), Image.BICUBIC), dtype=np.float32) / 40 * amp / 3.2 - 128 / 40 * amp / 3.2
+
+    out = np.empty((H, W, 3), dtype=np.float32)
+    out[:] = V_OCEAN
+    out[land] = V_LAND
+    out += grain[..., None]
+    out = out * (1 - rings_big[..., None] * 0.45) + np.array(V_LINE, np.float32) * rings_big[..., None] * 0.45
+    del rings_big
+
+    # 海岸线：陆地边缘一圈浅色细线
+    edge = np.asarray(land_img.filter(ImageFilter.MaxFilter(5)), dtype=bool) & ~land
+    out[edge] = out[edge] * 0.3 + np.array(V_LINE, np.float32) * 0.7
+
+    # 经纬网：每 10°；赤道、回归线、极圈加粗
+    grid = Image.new("L", (W, H), 0)
+    gd = ImageDraw.Draw(grid)
+    for lon in range(-180, 181, 10):
+        x = (lon + 180) / 360 * W
+        gd.line((x, 0, x, H), fill=150, width=3)
+    for lat in range(-80, 81, 10):
+        y = (90 - lat) / 180 * H
+        gd.line((0, y, W, y), fill=150, width=3)
+    for lat in (0, 23.44, -23.44, 66.56, -66.56):
+        y = (90 - lat) / 180 * H
+        for x0 in range(0, W, 48):
+            gd.line((x0, y, x0 + 30, y), fill=230, width=6 if lat == 0 else 4)
+    g = np.asarray(grid, dtype=np.float32)[..., None] / 255 * 0.55
+    out = out * (1 - g) + np.array(V_LINE, np.float32) * g
+    png = WORK / "vintage_16k.png"
+    Image.fromarray(out.clip(0, 255).astype(np.uint8)).save(png, compress_level=1)
+    compress(png, OUT / "vintage.ktx")
+
+
 def main():
     WORK.mkdir(exist_ok=True)
-    what = sys.argv[1:] or ["physical", "political"]
+    what = sys.argv[1:] or ["physical", "political", "vintage"]
     if "physical" in what:
         eq = to_equirect(stitch_mercator())
         png = WORK / "physical_16k.png"
@@ -100,6 +160,8 @@ def main():
         compress(png, OUT / "physical.ktx")
     if "political" in what:
         compress(WORK / "political_16k.png", OUT / "political.ktx")
+    if "vintage" in what:
+        vintage()
 
 
 if __name__ == "__main__":

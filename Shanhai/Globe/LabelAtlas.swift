@@ -5,7 +5,7 @@ import Metal
 /// 地名标签的字形缓存：用到哪个才排哪个，按行（shelf）塞进一张 RG8 纹理，R = 文字，G = 白边。
 /// 塞满了就整张清空重来，下一帧把屏幕上的重新排进去。显存固定 16 MB。
 final class LabelAtlas {
-    enum Style { case country, region, city, capital }
+    enum Style { case country, region, city, capital, ocean, sea }
     struct Entry {
         var uv: SIMD4<Float>      // x0 y0 x1 y1
         var size: SIMD2<Float>    // 点
@@ -25,8 +25,11 @@ final class LabelAtlas {
         .region: .systemFont(ofSize: 11, weight: .regular),
         .city: .systemFont(ofSize: 11, weight: .regular),
         .capital: .systemFont(ofSize: 11.5, weight: .medium),
+        // 海名用宋体、拉开字距，像老地图上的注记
+        .ocean: NSFont(name: "Songti SC", size: 15) ?? .systemFont(ofSize: 15, weight: .light),
+        .sea: NSFont(name: "Songti SC", size: 11.5) ?? .systemFont(ofSize: 11.5, weight: .light),
     ]
-    private let tracking: [Style: CGFloat] = [.country: 1.0, .region: 0.6, .city: 0.2, .capital: 0.2]
+    private let tracking: [Style: CGFloat] = [.country: 1.0, .region: 0.6, .city: 0.2, .capital: 0.2, .ocean: 9, .sea: 3]
     private static let pad: CGFloat = 3
     private static let dot: CGFloat = 9     // 城市标签左侧圆点占的宽度
 

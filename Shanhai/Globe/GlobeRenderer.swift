@@ -37,6 +37,34 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
     private var meshIndexCount = 0
     private var political: MTLTexture!
     private var physical: MTLTexture?
+    private var vintage: MTLTexture?
+    private var vintageLoading = false
+    private var ringPSO: MTLRenderPipelineState!
+    private let geoDir = Bundle.main.resourceURL!.appendingPathComponent("Geo")
+
+    /// 复古底图第一次用到时才后台加载（约 90 MB 显存）
+    private func vintageTexture() -> MTLTexture? {
+        if let vintage { return vintage }
+        if !vintageLoading {
+            vintageLoading = true
+            let loader = MTKTextureLoader(device: device), dir = geoDir
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let t = try? GlobeRenderer.loadBase(loader, dir, "vintage")
+                DispatchQueue.main.async { self?.vintage = t; self?.controller?.requestRedraw() }
+            }
+        }
+        return nil
+    }
+
+    /// 当前风格实际用的底图与风格编号（底图还没加载好时先退回普通）
+    private func baseFor(_ mode: MapMode) -> (MTLTexture, Float) {
+        switch mode {
+        case .terrain: if let physical { return (physical, 1) }
+        case .vintage: if let v = vintageTexture() { return (v, 2) }
+        case .political: break
+        }
+        return (political, 0)
+    }
     private var atlas: LabelAtlas?
     private var labelBuffer: MTLBuffer
     private var labelCount = 0
@@ -129,6 +157,7 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
         linePSO = try pso("line_vertex", "line_fragment", blend: true)
         skyPSO = try pso("sky_vertex", "sky_fragment", blend: false)
         labelPSO = try pso("label_vertex", "label_fragment", blend: true)
+        ringPSO = try pso("ring_vertex", "ring_fragment", blend: false)
         let dd = MTLDepthStencilDescriptor()
         dd.depthCompareFunction = .less; dd.isDepthWriteEnabled = true
         depthOn = device.makeDepthStencilState(descriptor: dd)
@@ -254,7 +283,8 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
         invViewProj = vp.inverse
         eye = cam.frame.eye
 
-        let terrain = controller.mode == .terrain && physical != nil
+        let (baseTex, style) = baseFor(controller.mode)
+        let terrain = style == 1
         var u = Uniforms()
         u.viewProj = vp.float
         u.invViewProj = invViewProj.float
@@ -264,7 +294,7 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
         let l = simd_normalize(f.eye - f.target * 0.2 + f.up * 0.6 - simd_cross(f.up, f.eye) * 0.4)
         u.light = SIMD4(Float(l.x), Float(l.y), Float(l.z), 0)
         let exaggeration: Float = terrain ? 3.0 / 6_371_000 : 0
-        u.params = SIMD4(exaggeration, regionLineAlpha(cam), 0.55, terrain ? 1 : 0)
+        u.params = SIMD4(exaggeration, regionLineAlpha(cam), 0.55, style)
         u.sel = SIMD4(UInt32(controller.selectedRegion), UInt32(controller.selectedCountry), UInt32(controller.hoverRegion), UInt32(controller.hoverCountry))
         u.viewport = SIMD4(Float(size.width), Float(size.height), Float(scale), Float(cam.altitude))
 
@@ -285,12 +315,13 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
         enc.setFrontFacing(.counterClockwise)
         enc.setVertexBuffer(meshUV, offset: 0, index: 0)
         enc.setVertexTexture(geo.heightTexture, index: 0)
-        enc.setFragmentTexture(terrain ? physical! : political, index: 0)
+        enc.setFragmentTexture(baseTex, index: 0)
         enc.setFragmentTexture(geo.regionTexture, index: 1)
         enc.setFragmentTexture(geo.countryTexture, index: 2)
         enc.drawIndexedPrimitives(type: .triangle, indexCount: meshIndexCount, indexType: .uint32, indexBuffer: meshIndex, indexBufferOffset: 0)
 
         enc.setCullMode(.none)
+        if style == 2 && cam.altitude > 1.5 { drawRings(enc, cam) }
         enc.setRenderPipelineState(linePSO)
         enc.setDepthStencilState(depthRead)
         enc.setVertexBuffer(geo.borderVertices, offset: 0, index: 0)
@@ -301,10 +332,10 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
             enc.drawIndexedPrimitives(type: .lineStrip, indexCount: range.count, indexType: .uint32, indexBuffer: geo.borderIndices,
                                       indexBufferOffset: range.lowerBound * 4, instanceCount: width)
         }
-        let ink: SIMD3<Float> = terrain ? SIMD3(1, 1, 1) : SIMD3(0.25, 0.27, 0.32)
-        lines(geo.regionLineRange, color: SIMD4(ink, u.params.y * (terrain ? 0.5 : 0.45)), width: 1)
-        lines(geo.countryLineRange, color: SIMD4(ink, terrain ? 0.75 : 0.6), width: scale > 1 ? 2 : 1)
-        let accent = SIMD4<Float>(0.0, 0.48, 1.0, 1.0)
+        let ink: SIMD3<Float> = terrain ? SIMD3(1, 1, 1) : (style == 2 ? SIMD3(0.28, 0.15, 0.08) : SIMD3(0.25, 0.27, 0.32))
+        lines(geo.regionLineRange, color: SIMD4(ink, u.params.y * (terrain ? 0.5 : (style == 2 ? 0.35 : 0.45))), width: 1)
+        lines(geo.countryLineRange, color: SIMD4(ink, terrain ? 0.75 : (style == 2 ? 0.5 : 0.6)), width: scale > 1 ? 2 : 1)
+        let accent = style == 2 ? SIMD4<Float>(1.0, 0.86, 0.58, 1.0) : SIMD4<Float>(0.0, 0.48, 1.0, 1.0)
         if let r = geo.region(controller.selectedRegion) {
             for o in r.outline { lines(o[0]..<(o[0] + o[1]), color: accent, width: 4) }
         } else if let c = geo.country(controller.selectedCountry) {
@@ -334,6 +365,29 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
             }
         }
         cb.commit()
+    }
+
+    /// 两道黄铜环：相对视角固定（像桌面地球仪的支架），地球在环里转
+    private func drawRings(_ enc: MTLRenderCommandEncoder, _ cam: Camera) {
+        struct RingParams { var a: SIMD4<Float>; var b: SIMD4<Float>; var c: SIMD4<Float> }
+        let f = cam.frame
+        let z = simd_normalize(f.eye)
+        let x = simd_normalize(simd_cross(f.up, z)), y = simd_cross(z, x)
+        func ring(tilt deg: Double, open: Double, radius: Float) -> RingParams {
+            let t = deg * .pi / 180
+            let a = x * cos(t) + y * sin(t)                 // 屏幕内的长轴
+            let perp = -x * sin(t) + y * cos(t)
+            let b = simd_normalize(z * cos(open) + perp * sin(open))   // open 越大，椭圆越圆
+            func v(_ d: SIMD3<Double>) -> SIMD4<Float> { SIMD4(Float(d.x), Float(d.y), Float(d.z), 0) }
+            return RingParams(a: v(a), b: v(b), c: SIMD4(radius, 0.0068, 0, 0))
+        }
+        enc.setRenderPipelineState(ringPSO)
+        enc.setDepthStencilState(depthOn)
+        let verts = 256 * 2 * 11
+        for var r in [ring(tilt: 66, open: 0.55, radius: 1.10), ring(tilt: -12, open: 0.30, radius: 1.17)] {
+            enc.setVertexBytes(&r, length: MemoryLayout<RingParams>.stride, index: 2)
+            enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: verts)
+        }
     }
 
     /// 省界在远处淡出，免得整个地球糊成一团线
@@ -386,7 +440,13 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
             let x0 = Double(pt.x) - Double(e.anchor.x * s), y0 = Double(pt.y) - Double(e.anchor.y * s)
             let r = CGRect(x: x0, y: y0, width: w, height: h).insetBy(dx: Double(-3 * scale), dy: Double(-1 * scale))
             guard grid.insertIfFree(r) else { return false }
-            let kind: Float = style == .country ? 1 : (style == .region ? 0 : 2)
+            let kind: Float
+            switch style {
+            case .country: kind = 1
+            case .region: kind = 0
+            case .ocean, .sea: kind = 3
+            default: kind = 2
+            }
             out[n] = LabelInstance(center: SIMD2(Float(x0 + w / 2), Float(y0 + h / 2)), size: SIMD2(Float(w), Float(h)), uv: e.uv, style: SIMD4(kind, 1, 0, 0))
             n += 1
             return true
@@ -402,6 +462,10 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
             guard extentPx > Double(40 * scale) || (c.labelRank <= 2 && extentPx > Double(18 * scale)) else { continue }
             if showRegions && extentPx > Double(size.height) * 1.6 { continue }   // 太近时让位给省名
             place(key: -c.id, text: c.name, style: .country, lon: c.label[0], lat: c.label[1])
+        }
+        // 海洋名：大洋始终显示，海、湾按 Natural Earth 的 min_label 随放大出现
+        for (i, m) in geo.marine.enumerated() where m.minLabel <= zoom + 0.4 {
+            place(key: 2_000_000 + i, text: m.name, style: m.kind == "ocean" ? .ocean : .sea, lon: m.lon, lat: m.lat)
         }
         // 首都和大城市先于省名，近处才轮到普通城市
         for (i, c) in geo.cities.enumerated() where c.minZoom <= zoom - 0.6 && (c.cap == 2 || c.minZoom <= zoom - 1.6) {

@@ -7,12 +7,14 @@ struct Uniforms {
     float4x4 invViewProj;
     float4 eye;        // xyz
     float4 light;      // xyz
-    float4 params;     // x 地形夸张（半径/米） y 省界透明度 z 国界透明度 w 地形模式
+    float4 params;     // x 地形夸张（半径/米） y 省界透明度 z 国界透明度 w 风格：0 普通 1 地形 2 复古
     uint4  sel;        // 选中省、选中国、悬停省、悬停国
     float4 viewport;   // 宽、高（像素）、缩放、海拔（半径）
 };
 
 constant float PI = 3.14159265358979;
+
+static int styleOf(constant Uniforms &u) { return int(u.params.w + 0.5); }
 constant float3 ACCENT = float3(0.0, 0.48, 1.0);
 
 static float3 spherePoint(float latr, float lonr) {
@@ -30,7 +32,10 @@ struct GlobeOut {
     float4 position [[position]];
     float2 uv;
     float3 normal;
+    float3 world;
 };
+
+
 
 vertex GlobeOut globe_vertex(uint vid [[vertex_id]],
                              const device float2 *uvs [[buffer(0)]],
@@ -45,6 +50,7 @@ vertex GlobeOut globe_vertex(uint vid [[vertex_id]],
     o.position = u.viewProj * float4(n * r, 1.0);
     o.uv = uv;
     o.normal = n;
+    o.world = n * r;
     return o;
 }
 
@@ -71,11 +77,23 @@ fragment float4 globe_fragment(GlobeOut in [[stage_in]],
         if (rid != 0 && rid == u.sel.z) tint = 0.16;
         else if (u.sel.z == 0 && cid != 0 && cid == u.sel.w) tint = 0.12;
     }
-    color = mix(color, ACCENT, tint);
+    // 复古风格用暖金高亮，蓝色压在棕色上会发闷
+    float3 accent = styleOf(u) == 2 ? float3(1.0, 0.84, 0.55) : ACCENT;
+    color = mix(color, accent, tint * (styleOf(u) == 2 ? 1.3 : 1.0));
 
     float3 n = normalize(in.normal);
-    float d = max(dot(n, normalize(u.light.xyz)), 0.0);
-    float shade = u.params.w > 0.5 ? (0.62 + 0.45 * d) : (0.86 + 0.16 * d);
+    float3 L = normalize(u.light.xyz);
+    float d = max(dot(n, L), 0.0);
+    int style = styleOf(u);
+    if (style == 2) {
+        // 复古皮面：边缘压暗显出球体，加一层暖色柔光
+        float3 V = normalize(u.eye.xyz - in.world);
+        float rim = saturate(dot(n, V));
+        float spec = pow(max(dot(reflect(-L, n), V), 0.0), 34.0) * 0.07;
+        float shade = (0.70 + 0.38 * d) * (0.72 + 0.28 * rim);
+        return float4(color * shade + float3(1.0, 0.86, 0.66) * spec, 1.0);
+    }
+    float shade = style == 1 ? (0.62 + 0.45 * d) : (0.86 + 0.16 * d);
     return float4(color * shade, 1.0);
 }
 
@@ -128,6 +146,11 @@ fragment float4 sky_fragment(SkyOut in [[stage_in]], constant Uniforms &u [[buff
     float3 rd = normalize(b.xyz / b.w - a.xyz / a.w);
     float t = max(-dot(ro, rd), 0.0);
     float closest = length(ro + rd * t);
+    if (styleOf(u) == 2) {
+        // 复古：暖灰桌面，四角微暗，不画大气光晕
+        float v = 1.0 - 0.10 * dot(in.ndc, in.ndc);
+        return float4(float3(0.87, 0.85, 0.82) * v, 1.0);
+    }
     float3 space = float3(0.035, 0.045, 0.075);
     float glow = 1.0 - smoothstep(1.0, 1.0 + 0.045, closest);
     glow = pow(glow, 1.8);
@@ -168,16 +191,73 @@ fragment float4 label_fragment(LabelOut in [[stage_in]], constant Uniforms &u [[
                                texture2d<float> atlas [[texture(0)]]) {
     constexpr sampler s(filter::linear);
     float2 fh = atlas.sample(s, in.uv).rg;
-    bool terrain = u.params.w > 0.5;
-    // kind：0 省 1 国 2 城市
+    int style = styleOf(u);
+    bool terrain = style == 1;
+    // kind：0 省 1 国 2 城市 3 海洋
     // 国名深灰、城市近墨、省名中灰；白边略透，不压底图
     // 地形：国名、城市纯白，省名退一档成浅灰白；深色白边加重到 0.62，冰原、沙漠上也托得住
     float3 ink = terrain ? (in.kind > 0.5 ? float3(1.0) : float3(0.84, 0.86, 0.88))
                          : (in.kind > 1.5 ? float3(0.17, 0.17, 0.19) : (in.kind > 0.5 ? float3(0.26, 0.26, 0.29) : float3(0.43, 0.43, 0.46)));
     float3 halo = terrain ? float3(0.02, 0.04, 0.06) : float3(1.0, 0.995, 0.985);
     float haloA = terrain ? 0.78 : 0.72;
+    if (style == 2) {
+        // 复古：像烫印在皮面上，奶油色字配深棕描边；省名退一档
+        ink = in.kind > 0.5 ? float3(0.98, 0.90, 0.76) : float3(0.90, 0.78, 0.62);
+        halo = float3(0.24, 0.12, 0.06);
+        haloA = 0.55;
+    }
+    if (in.kind > 2.5) {
+        // 海洋名：不要白边，颜色贴着海面
+        ink = style == 2 ? float3(0.42, 0.22, 0.10) : (terrain ? float3(0.70, 0.82, 0.94) : float3(0.30, 0.46, 0.60));
+        haloA = 0.0;
+    }
     float a = max(fh.r, fh.g * haloA);
     float3 c = mix(halo, ink, fh.r / max(a, 1e-4) * (fh.r > 0.0 ? 1.0 : 0.0));
     a *= in.alpha;
     return float4(c * a, a);
+}
+
+// ---------- 黄铜环（复古风格） ----------
+struct RingParams {
+    float4 a;       // 环平面的两根正交轴（世界坐标）与半径
+    float4 b;
+    float4 c;       // x 半径 y 管粗
+};
+
+struct RingOut {
+    float4 position [[position]];
+    float3 normal;
+    float3 world;
+};
+
+constant uint RING_SEG = 256, TUBE_SEG = 10;
+
+vertex RingOut ring_vertex(uint vid [[vertex_id]], constant Uniforms &u [[buffer(1)]], constant RingParams &rp [[buffer(2)]]) {
+    // 三角带：每段两个顶点 × (TUBE_SEG + 1)
+    uint ring = vid / (2 * (TUBE_SEG + 1));
+    uint k = vid % (2 * (TUBE_SEG + 1));
+    uint tube = k / 2;
+    uint seg = ring + (k & 1);
+    float t = float(seg) / float(RING_SEG) * 2.0 * PI;
+    float s = float(tube) / float(TUBE_SEG) * 2.0 * PI;
+    float3 A = rp.a.xyz, B = rp.b.xyz, N = normalize(cross(A, B));
+    float3 radial = cos(t) * A + sin(t) * B;
+    float3 normal = cos(s) * radial + sin(s) * N;
+    float3 p = radial * rp.c.x + normal * rp.c.y;
+    RingOut o;
+    o.position = u.viewProj * float4(p, 1.0);
+    o.normal = normal;
+    o.world = p;
+    return o;
+}
+
+fragment float4 ring_fragment(RingOut in [[stage_in]], constant Uniforms &u [[buffer(1)]]) {
+    float3 n = normalize(in.normal);
+    float3 V = normalize(u.eye.xyz - in.world);
+    float3 L = normalize(u.light.xyz);
+    float d = max(dot(n, L), 0.0);
+    float spec = pow(max(dot(reflect(-L, n), V), 0.0), 40.0);
+    float3 brass = float3(0.66, 0.53, 0.32);
+    float3 c = brass * (0.35 + 0.75 * d) + float3(1.0, 0.92, 0.75) * spec * 0.9;
+    return float4(c, 1.0);
 }

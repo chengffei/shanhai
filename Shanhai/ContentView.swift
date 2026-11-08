@@ -41,10 +41,11 @@ struct ContentView: View {
                 Picker("视图", selection: $controller.mode) {
                     Text("普通").tag(MapMode.political)
                     Text("地形").tag(MapMode.terrain)
+                    Text("复古").tag(MapMode.vintage)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 140)
-                .help("普通：按国家上色的政区图；地形：卫星影像加真实起伏")
+                .frame(width: 200)
+                .help("普通：按国家上色的政区图；地形：卫星影像加真实起伏；复古：焦糖皮面地球仪")
             }
         }
         .searchable(text: $query, placement: .toolbar, prompt: "搜索国家、省份或城市")
@@ -196,7 +197,7 @@ enum DebugHooks {
             cam.clamp()
             c.camera = cam
         }
-        if env["SHANHAI_MODE"] == "terrain" { c.mode = .terrain }
+        if let m = env["SHANHAI_MODE"], let mode = MapMode(rawValue: m) { c.mode = mode }
         if let v = nums("SHANHAI_SELECT"), v.count == 2 { c.select(lat: v[0], lon: v[1]) }
         if let v = nums("SHANHAI_HOVER"), v.count == 2 { c.hover(lat: v[0], lon: v[1]) }
         // SHANHAI_ICON=输出.png：离屏渲染一张 2048² 地球后退出（SHANHAI_SKY=1 带太空背景）

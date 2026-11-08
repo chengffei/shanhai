@@ -45,11 +45,22 @@ struct City: Decodable {
     let cap: Int          // 2 首都 1 省会 0 其他
 }
 
+struct Marine: Decodable {
+    let name: String
+    let lon: Double
+    let lat: Double
+    let kind: String
+    let minLabel: Double
+    let rank: Int
+    let area: Double
+}
+
 /// 离线地理数据：元数据、ID 栅格（CPU 与 GPU 共用一份内存）、边界线、高程。
 final class GeoData {
     let countries: [Country]          // 下标 = id - 1
     let regions: [Region]
     let cities: [City]                // 按重要性排好
+    let marine: [Marine]              // 海洋、海、湾，按重要性排好
     let idWidth: Int, idHeight: Int
     let regionIDs: MTLBuffer          // uint16，行优先，(0,0) 在西北角
     let countryIDs: MTLBuffer         // uint8
@@ -67,6 +78,7 @@ final class GeoData {
         countries = try dec.decode([Country].self, from: Data(contentsOf: dir.appendingPathComponent("countries.json")))
         regions = try dec.decode([Region].self, from: Data(contentsOf: dir.appendingPathComponent("regions.json")))
         cities = try dec.decode([City].self, from: Data(contentsOf: dir.appendingPathComponent("cities.json")))
+        marine = try dec.decode([Marine].self, from: Data(contentsOf: dir.appendingPathComponent("marine.json")))
 
         // ID 栅格：头 8 字节宽高，之后 raw deflate
         let ids = try Data(contentsOf: dir.appendingPathComponent("ids.bin"))

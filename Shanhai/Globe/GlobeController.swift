@@ -2,7 +2,11 @@ import AppKit
 import MetalKit
 import Observation
 
-enum MapMode: String, CaseIterable { case political, terrain }
+enum MapMode: String, CaseIterable {
+    case political, terrain, vintage
+    /// 着色器里的风格编号
+    var styleIndex: Float { switch self { case .political: 0; case .terrain: 1; case .vintage: 2 } }
+}
 
 /// 地球的状态：相机、选中、悬停、模式。视图和面板都看它。
 @Observable
