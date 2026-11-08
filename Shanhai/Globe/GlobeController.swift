@@ -30,6 +30,21 @@ final class GlobeController {
         didSet { if rightInset != oldValue { animating = true } }
     }
     @ObservationIgnored private(set) var currentInset: Double = 0
+    /// 季风图层：开关、月份（0 = 1 月中旬，可带小数）、是否自动播放
+    var climateOn = false {
+        didSet {
+            guard climateOn != oldValue else { return }
+            if climateOn { climatePlaying = true }
+            animating = true
+        }
+    }
+    var climateMonth: Double = Double(Calendar.current.component(.month, from: Date()) - 1)
+    var climatePlaying = true
+    /// 图层淡入淡出（0…1），每帧逼近开关状态
+    @ObservationIgnored private(set) var climateFade: Double = 0
+    static let secondsPerMonth = 2.0
+    var climateMonthIndex: Int { Int(climateMonth.rounded()) % 12 }
+
     /// 搜索框获得焦点的请求（菜单 ⌘F 递增）
     var searchRequest = 0
     var selectedRegion = 0 { didSet { requestRedraw() } }
@@ -147,6 +162,16 @@ final class GlobeController {
         animate(to: c, duration: c.altitude < camera.altitude ? 1.2 : 0.6)
     }
 
+    /// 打开季风时若在看整个地球、没选中什么，就转到亚洲：季风最典型的地方
+    func toggleClimate() {
+        climateOn.toggle()
+        if climateOn && camera.altitude > 1.5 && selectedCountry == 0 {
+            var c = camera
+            c.lat = 15; c.lon = 95; c.tilt = 0; c.heading = 0
+            animate(to: c, duration: 1.2)
+        }
+    }
+
     func northUp() {
         var c = camera
         c.heading = 0
@@ -199,10 +224,18 @@ final class GlobeController {
         } else {
             velocity = .zero
         }
+        // 季风：淡入淡出，播放时月份往前走
+        let fadeTarget = climateOn ? 1.0 : 0.0
+        if climateFade != fadeTarget {
+            climateFade += max(-dt * 3, min(dt * 3, fadeTarget - climateFade))
+        }
+        if climateOn && climatePlaying {
+            climateMonth = (climateMonth + dt / Self.secondsPerMonth).truncatingRemainder(dividingBy: 12)
+        }
         // 面板留白平滑过渡
         let diff = rightInset - currentInset
         currentInset = abs(diff) < 0.5 ? rightInset : currentInset + diff * min(1, dt * 12)
-        if flight == nil && velocity == .zero && animating && currentInset == rightInset {
+        if flight == nil && velocity == .zero && animating && currentInset == rightInset && !climateOn && climateFade == 0 {
             DispatchQueue.main.async { self.animating = false }
         }
     }

@@ -27,7 +27,12 @@ struct ContentView: View {
             if open { hasSelectedOnce = true }
         }
         .overlay(alignment: .bottom) {
-            if !hasSelectedOnce && !hasSelection {
+            if controller.climateOn {
+                MonsoonBar(controller: controller)
+                    .padding(.bottom, 24)
+                    .padding(.trailing, hasSelection ? 392 : 0)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if !hasSelectedOnce && !hasSelection {
                 CoachMark { hasSelectedOnce = true }
                     .padding(.bottom, 28)
                     .transition(.opacity)
@@ -46,6 +51,7 @@ struct ContentView: View {
             }
         }
         .animation(.smooth(duration: 0.2), value: controller.loadingStyle)
+        .animation(.smooth(duration: 0.3), value: controller.climateOn)
         .onChange(of: controller.searchRequest) { searchFocused = true }
         .overlay(alignment: .bottomLeading) { HoverName(controller: controller).padding(16) }
         .overlay(alignment: .bottomTrailing) {
@@ -65,7 +71,7 @@ struct ContentView: View {
         .onAppear { DebugHooks.apply(controller) }
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .toolbar {
-            ToolbarItem(placement: .principal) {
+            ToolbarItemGroup(placement: .principal) {
                 Picker("视图", selection: $controller.mode) {
                     Text("普通").tag(MapMode.political)
                     Text("地形").tag(MapMode.terrain)
@@ -75,6 +81,18 @@ struct ContentView: View {
                 .pickerStyle(.segmented)
                 .frame(width: 260)
                 .help("普通：按国家上色的政区图；地形：卫星影像加立体浮雕；复古：焦糖皮面地球仪；黑金：黑漆金箔地球仪")
+                Group {
+                if controller.climateOn {
+                    Button { controller.toggleClimate() } label: { Label("季风", systemImage: "wind") }
+                        .buttonStyle(.glassProminent)
+                        .tint(Color(red: controller.mode.linkColor.0, green: controller.mode.linkColor.1, blue: controller.mode.linkColor.2))
+                        .labelStyle(.titleAndIcon)
+                } else {
+                    Button { controller.toggleClimate() } label: { Label("季风", systemImage: "wind") }
+                        .labelStyle(.titleAndIcon)
+                }
+                }
+                .help("季风：一年里风向随季节反过来。夏天陆地比海洋热，海风带着水汽吹进大陆，下雨多；冬天反过来，风从大陆吹向海洋，天气干")
             }
         }
         .searchable(text: $query, placement: .toolbar, prompt: "搜索国家、省份或城市")
@@ -105,6 +123,105 @@ struct ContentView: View {
             controller.select(lat: lat, lon: lon)
         }
         query = ""
+    }
+}
+
+/// 季风图层的时间轴：播放、拖动月份、当月一句解说、图例
+struct MonsoonBar: View {
+    let controller: GlobeController
+
+    private static let captions: [String] = [
+        "冬季风：大陆比海洋冷，风从陆地吹向海洋，南亚、东亚干燥少雨",   // 1
+        "冬季风：大陆比海洋冷，风从陆地吹向海洋，南亚、东亚干燥少雨",   // 2
+        "风向转换期：太阳往北移，雨带跟着往北走",                       // 3
+        "风向转换期：太阳往北移，雨带跟着往北走",                       // 4
+        "夏季风登场：华南进入雨季，印度还在等雨",                       // 5
+        "夏季风推进：印度雨季开始，长江流域进入梅雨",                   // 6
+        "夏季风最盛：大陆比海洋热，湿润的海风吹进陆地，雨带到最北",     // 7
+        "夏季风最盛：大陆比海洋热，湿润的海风吹进陆地，雨带到最北",     // 8
+        "夏季风减弱：雨带开始往南撤",                                   // 9
+        "风向转回：冬季风建立，北方转干，雨带退回赤道附近",             // 10
+        "风向转回：冬季风建立，北方转干，雨带退回赤道附近",             // 11
+        "冬季风：大陆比海洋冷，风从陆地吹向海洋，南亚、东亚干燥少雨",   // 12
+    ]
+
+    var body: some View {
+        let m = controller.climateMonthIndex
+        let sw = Swatches(controller.mode)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Button { controller.climatePlaying.toggle() } label: {
+                    Image(systemName: controller.climatePlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(width: 30, height: 30)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: .circle)
+                .help(controller.climatePlaying ? "暂停" : "播放：每 2 秒走一个月")
+                Text("\(m + 1) 月")
+                    .font(.system(size: 20, weight: .semibold))
+                    .monospacedDigit()
+                    .frame(width: 54, alignment: .leading)
+                    .contentTransition(.numericText())
+                Slider(value: Binding(get: { controller.climateMonth },
+                                      set: { controller.climateMonth = $0; controller.climatePlaying = false }),
+                       in: 0...11.99)
+                    .help("拖动看不同月份")
+            }
+            Text(Self.captions[m])
+                .font(.callout)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 16) {
+                LegendItem(title: "地面风") { Capsule().fill(sw.wind).frame(width: 18, height: 2.5) }
+                LegendItem(title: "雨多") { RoundedRectangle(cornerRadius: 3).fill(sw.rain.opacity(0.7)).frame(width: 14, height: 10) }
+                LegendItem(title: "雨带中心") {
+                    Path { p in p.move(to: CGPoint(x: 0, y: 1.5)); p.addLine(to: CGPoint(x: 18, y: 1.5)) }
+                        .stroke(sw.band, style: StrokeStyle(lineWidth: 2, dash: [4, 3]))
+                        .frame(width: 18, height: 3)
+                }
+                LegendItem(title: "季风区") { RoundedRectangle(cornerRadius: 3).stroke(sw.monsoon, lineWidth: 1.8).frame(width: 14, height: 10) }
+                Spacer(minLength: 0)
+                Text("1991–2020 气候平均").foregroundStyle(.tertiary)
+            }
+            .font(.caption)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 14)
+        .frame(width: 540)
+        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+    }
+
+    /// 图例颜色和着色器里各风格的颜色对应
+    private struct Swatches {
+        let wind: Color, rain: Color, band: Color, monsoon: Color
+        init(_ mode: MapMode) {
+            switch mode {
+            case .terrain:
+                wind = .primary; rain = Color(red: 0.28, green: 0.68, blue: 1.0)
+                band = Color(red: 0.35, green: 0.85, blue: 1.0); monsoon = Color(red: 1.0, green: 0.60, blue: 0.22)
+            case .vintage:
+                wind = Color(red: 0.26, green: 0.12, blue: 0.04); rain = Color(red: 0.10, green: 0.30, blue: 0.40)
+                band = Color(red: 0.10, green: 0.28, blue: 0.36); monsoon = Color(red: 0.62, green: 0.16, blue: 0.08)
+            case .blackgold:
+                wind = Color(red: 0.75, green: 0.60, blue: 0.30); rain = Color(red: 0.28, green: 0.74, blue: 0.84)
+                band = Color(red: 0.35, green: 0.70, blue: 0.85); monsoon = Color(red: 1.0, green: 0.60, blue: 0.22)
+            case .political:
+                wind = Color(red: 0.06, green: 0.14, blue: 0.32); rain = Color(red: 0.04, green: 0.36, blue: 0.88)
+                band = Color(red: 0.02, green: 0.22, blue: 0.62); monsoon = Color(red: 0.90, green: 0.36, blue: 0.08)
+            }
+        }
+    }
+}
+
+private struct LegendItem<Mark: View>: View {
+    let title: String
+    @ViewBuilder let mark: () -> Mark
+    var body: some View {
+        HStack(spacing: 5) {
+            mark()
+            Text(title).foregroundStyle(.secondary)
+        }
     }
 }
 
@@ -241,6 +358,10 @@ enum DebugHooks {
             if v.count > 4 { cam.heading = v[4] * .pi / 180 }
             cam.clamp()
             c.camera = cam
+        }
+        if let v = nums("SHANHAI_MONSOON"), let m = v.first {
+            // SHANHAI_MONSOON=月份（1–12）：打开季风并停在该月
+            c.climateOn = true; c.climatePlaying = false; c.climateMonth = m - 1
         }
         if let m = env["SHANHAI_MODE"], let mode = MapMode(rawValue: m) { c.mode = mode }
         if let v = nums("SHANHAI_SELECT"), v.count == 2 { c.select(lat: v[0], lon: v[1]) }

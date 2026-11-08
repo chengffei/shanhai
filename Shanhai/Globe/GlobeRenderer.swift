@@ -9,6 +9,13 @@ struct Uniforms {
     var params = SIMD4<Float>()
     var sel = SIMD4<UInt32>()
     var viewport = SIMD4<Float>()
+    var climate = SIMD4<Float>()     // x 季风图层不透明度 y 月份
+}
+
+struct WindParams {
+    var cap = SIMD4<Float>()         // xyz 生成区中心 w 半径余弦
+    var mv = SIMD4<Float>()          // dt、月份、速度系数、随机种子
+    var idx = SIMD4<UInt32>()        // 环形下标、K、粒子数
 }
 
 struct LabelInstance {
@@ -29,6 +36,9 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
     private var linePSO: MTLRenderPipelineState!
     private var skyPSO: MTLRenderPipelineState!
     private var labelPSO: MTLRenderPipelineState!
+    private var windPSO: MTLRenderPipelineState!
+    private var bandPSO: MTLRenderPipelineState!
+    private var windStep: MTLComputePipelineState!
     private var depthOn: MTLDepthStencilState!
     private var depthRead: MTLDepthStencilState!
     private var depthOff: MTLDepthStencilState!
@@ -71,6 +81,61 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
         }
         return (political, 0)
     }
+    // MARK: 季风图层（第一次打开时才加载，约 6 MB 数据 + 5 MB 粒子）
+    private static let particleCount = 6_000
+    private static let trailLength = 40
+    private var climTex: MTLTexture?
+    private var bandBuffer: MTLBuffer?
+    private var particleBuffer: MTLBuffer?
+    private var trailBuffer: MTLBuffer?
+    private lazy var emptyClim: MTLTexture = {
+        let d = MTLTextureDescriptor()
+        d.textureType = .type3D; d.pixelFormat = .rgba16Float; d.width = 1; d.height = 1; d.depth = 1; d.usage = .shaderRead
+        return device.makeTexture(descriptor: d)!
+    }()
+    private var trailHead: UInt32 = 0
+    private var lastFrame = CACurrentMediaTime()
+
+    private func loadClimate() -> Bool {
+        if climTex != nil { return true }
+        guard let d = try? Data(contentsOf: geoDir.appendingPathComponent("climate.bin"), options: .alwaysMapped), d.count > 16 else { return false }
+        return d.withUnsafeBytes { raw -> Bool in
+            let w = Int(raw.load(fromByteOffset: 4, as: UInt32.self)), h = Int(raw.load(fromByteOffset: 8, as: UInt32.self))
+            let m = Int(raw.load(fromByteOffset: 12, as: UInt32.self))
+            let texBytes = w * h * m * 8
+            guard d.count >= 16 + texBytes + m * 361 * 4 else { return false }
+            let td = MTLTextureDescriptor()
+            td.textureType = .type3D; td.pixelFormat = .rgba16Float
+            td.width = w; td.height = h; td.depth = m
+            td.usage = .shaderRead; td.storageMode = .shared
+            guard let t = device.makeTexture(descriptor: td) else { return false }
+            t.replace(region: MTLRegionMake3D(0, 0, 0, w, h, m), mipmapLevel: 0, slice: 0,
+                      withBytes: raw.baseAddress! + 16, bytesPerRow: w * 8, bytesPerImage: w * h * 8)
+            bandBuffer = device.makeBuffer(bytes: raw.baseAddress! + 16 + texBytes, length: m * 361 * 4, options: .storageModeShared)
+            let n = GlobeRenderer.particleCount, k = GlobeRenderer.trailLength
+            particleBuffer = device.makeBuffer(length: n * 16, options: .storageModeShared)
+            trailBuffer = device.makeBuffer(length: n * k * 16, options: .storageModeShared)
+            memset(particleBuffer!.contents(), 0, n * 16)
+            memset(trailBuffer!.contents(), 0, n * k * 16)
+            climTex = t
+            return true
+        }
+    }
+
+    /// 粒子生成区：以视野中心为圆心、盖住屏幕的球冠，放大缩小时屏幕上的密度不变
+    private func windParams(_ cam: Camera, month: Float, dt: Float) -> WindParams {
+        let la = cam.lat * .pi / 180, lo = cam.lon * .pi / 180
+        let c = SIMD3(cos(la) * sin(lo), sin(la), cos(la) * cos(lo))
+        let horizon = acos(1 / (1 + cam.altitude))
+        let r = min(horizon, cam.altitude * tan(Camera.fovY / 2) * 1.9 * (1 + cam.tilt * 1.5))
+        var p = WindParams()
+        p.cap = SIMD4(Float(c.x), Float(c.y), Float(c.z), Float(cos(r)))
+        // 10 m/s 的风每秒走过生成区半径的约 12%
+        p.mv = SIMD4(dt, month, Float(0.014 * r / 1.2), Float.random(in: 0..<1))
+        p.idx = SIMD4(trailHead, UInt32(GlobeRenderer.trailLength), UInt32(GlobeRenderer.particleCount), 0)
+        return p
+    }
+
     private var atlas: LabelAtlas?
     private var labelBuffer: MTLBuffer
     private var labelCount = 0
@@ -166,6 +231,9 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
         linePSO = try pso("line_vertex", "line_fragment", blend: true)
         skyPSO = try pso("sky_vertex", "sky_fragment", blend: false)
         labelPSO = try pso("label_vertex", "label_fragment", blend: true)
+        windPSO = try pso("wind_vertex", "wind_fragment", blend: true)
+        bandPSO = try pso("band_vertex", "band_fragment", blend: true)
+        windStep = try device.makeComputePipelineState(function: lib.makeFunction(name: "wind_step")!)
         let dd = MTLDepthStencilDescriptor()
         dd.depthCompareFunction = .less; dd.isDepthWriteEnabled = true
         depthOn = device.makeDepthStencilState(descriptor: dd)
@@ -251,6 +319,7 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
         enc.setFragmentTexture(geo.regionTexture, index: 1)
         enc.setFragmentTexture(geo.countryTexture, index: 2)
         enc.setFragmentTexture(geo.heightTexture, index: 3)
+        enc.setFragmentTexture(emptyClim, index: 4)
         enc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.count, indexType: .uint32, indexBuffer: mesh.index, indexBufferOffset: 0)
         enc.setCullMode(.none); enc.setRenderPipelineState(linePSO); enc.setDepthStencilState(depthRead)
         enc.setVertexBuffer(geo.borderVertices, offset: 0, index: 0)
@@ -317,7 +386,29 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
 
         updateLabels(camera: cam, vp: vp, size: size, scale: scale, terrain: terrain)
 
+        let now = CACurrentMediaTime()
+        let dt = Float(min(0.05, now - lastFrame))
+        lastFrame = now
         let cb = queue.makeCommandBuffer()!
+
+        // 季风图层：先用计算着色器推进风的粒子
+        let climA = Float(controller.climateFade)
+        var wind: WindParams?
+        if climA > 0, loadClimate(), let climTex, let particleBuffer, let trailBuffer {
+            u.climate = SIMD4(climA, Float(controller.climateMonth), 0, 0)
+            trailHead = (trailHead + 1) % UInt32(GlobeRenderer.trailLength)
+            var wp = windParams(cam, month: Float(controller.climateMonth), dt: dt)
+            let ce = cb.makeComputeCommandEncoder()!
+            ce.setComputePipelineState(windStep)
+            ce.setBuffer(particleBuffer, offset: 0, index: 0)
+            ce.setBuffer(trailBuffer, offset: 0, index: 1)
+            ce.setBytes(&wp, length: MemoryLayout<WindParams>.stride, index: 2)
+            ce.setTexture(climTex, index: 0)
+            ce.dispatchThreadgroups(MTLSize(width: (GlobeRenderer.particleCount + 63) / 64, height: 1, depth: 1),
+                                    threadsPerThreadgroup: MTLSize(width: 64, height: 1, depth: 1))
+            ce.endEncoding()
+            wind = wp
+        }
         let enc = cb.makeRenderCommandEncoder(descriptor: pass)!
         enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)
         enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)
@@ -337,6 +428,7 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
         enc.setFragmentTexture(geo.regionTexture, index: 1)
         enc.setFragmentTexture(geo.countryTexture, index: 2)
         enc.setFragmentTexture(geo.heightTexture, index: 3)
+        enc.setFragmentTexture(wind != nil ? climTex! : emptyClim, index: 4)
         enc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.count, indexType: .uint32, indexBuffer: mesh.index, indexBufferOffset: 0)
 
         enc.setCullMode(.none)
@@ -363,6 +455,31 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
             for o in r.outline { lines(o[0]..<(o[0] + o[1]), color: accent, width: 4) }
         } else if let c = geo.country(controller.selectedCountry) {
             for o in c.outline { lines(o[0]..<(o[0] + o[1]), color: accent, width: 4) }
+        }
+
+        if var wp = wind, let bandBuffer, let particleBuffer, let trailBuffer {
+            // 雨带中心线（虚线），再画风
+            var bandColor: SIMD4<Float>
+            switch style {
+            case 1: bandColor = SIMD4(0.35, 0.85, 1.0, 1.0)
+            case 2: bandColor = SIMD4(0.10, 0.28, 0.36, 0.9)
+            case 3: bandColor = SIMD4(0.55, 0.90, 1.0, 0.9)
+            default: bandColor = SIMD4(0.02, 0.22, 0.62, 0.9)
+            }
+            enc.setRenderPipelineState(bandPSO)
+            enc.setDepthStencilState(depthRead)
+            enc.setVertexBuffer(bandBuffer, offset: 0, index: 0)
+            enc.setFragmentBytes(&bandColor, length: 16, index: 0)
+            enc.drawPrimitives(type: .lineStrip, vertexStart: 0, vertexCount: 361, instanceCount: scale > 1 ? 9 : 4)
+
+            enc.setRenderPipelineState(windPSO)
+            enc.setDepthStencilState(depthOff)
+            enc.setVertexBuffer(particleBuffer, offset: 0, index: 0)
+            enc.setVertexBuffer(trailBuffer, offset: 0, index: 2)
+            enc.setVertexBytes(&wp, length: MemoryLayout<WindParams>.stride, index: 3)
+            enc.setVertexTexture(geo.countryTexture, index: 0)
+            enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: GlobeRenderer.trailLength * 2,
+                               instanceCount: GlobeRenderer.particleCount)
         }
 
         if labelCount > 0, let atlas {

@@ -9,6 +9,12 @@
 - 自写 Metal 地球：三种风格。普通是按国家上色的政区图；地形是 Sentinel-2 卫星影像，加 3 倍夸张的真实起伏；复古是焦糖皮面地球仪（11-08 加）。
 - 复古风格（11-08 去掉了黄铜环，Felix 嫌挡视线）包括：焦糖海、深棕陆地、海岸外水纹线、经纬网，暖灰桌面背景；奶油色字配深棕描边；暖金高亮。底图第一次切到复古时才加载，约 90 MB。
 - 黑金风格（11-08）：钢琴漆黑海、金箔陆地（低频起伏加横向拉丝）；金面用金属高光加边缘反射，海面漆面高光，高光按高度减弱（近看不打爆）；深暖黑背景、球后淡暖光；底图首次切换才加载。
+- 季风图层（11-08）：工具栏「季风」或 ⌘J，任何风格都能叠。逐月气候平均，每 2 秒走一个月，可拖动。画四样：
+  - 地面风：6000 个粒子，计算着色器推进，每个留 40 帧轨迹；只在视野内的球冠里生成，缩放时屏幕密度不变；陆地和海上换色；
+  - 降水：2 到 12 mm/天渐变着色，底图同时褪色 35%（地形 20%）；
+  - 季风区轮廓：Wang & Ding 定义（夏季比冬季多 2.5 mm/天，且夏季占全年 55% 以上）；
+  - 雨带中心虚线：25°S 到 30°N 内沿经度找降水最多的连续路径（Viterbi，跳纬度扣分），逐经线取最大值会来回跳。
+  打开时若在看全球且没选中，会转到亚洲。底部时间轴有当月一句解说和图例。
 - 海洋名 280 个（Natural Earth marine polys），宋体、拉开字距，所有风格都显示。
 - 标签按所在位置（陆地或海上）换配色：复古、黑金在海上反色。
 - 体验（11-08 评审后加）：面板打开时投影中心左移半个面板宽，选中处不被遮；首次打开底部有一句引导（`hasSelectedOnce`）；复古、黑金底图加载时顶部有提示；「地图」菜单 ⌘1–4 切风格、⌘F 搜索、⌘0 回全球、⌘D 3D、Esc 关面板；面板每节默认 4 行可展开；面板链接色随风格。
@@ -36,6 +42,7 @@
 | build_geo.py | 国家、省、城市元数据，ID 栅格，边界线，高程 |
 | build_imagery.py | political.ktx、physical.ktx（16K BC1） |
 | build_content.py | Content/<国家a3>.json |
+| build_climate.py | climate.bin：NCEP/NCAR 10 m 风 + GPCP 降水，1991–2020 月平均，重采样到 1° |
 
 - 国界口径：Natural Earth 中国视角（admin_0_countries_chn）。台湾、香港、澳门是中国的省级区；藏南并入西藏（`DISSOLVE`）；其他争议区按多数像素所在国归属。
 - 法、意、西、英的 admin-1 比省级细一级，按大区、自治区、构成国合并（`GROUP_BY`，Wikidata ID 已逐个核对）。
@@ -52,13 +59,14 @@
   - 底图改 BC1 KTX：省掉 JPG 解码，少约 150 MB；
   - MSAA 颜色和深度改 memoryless：少约 130 MB；
   - ID 栅格、高程、网格直接写进共享显存，读文件用内存映射：少约 190 MB。临时大数组释放后分配器不还给系统，所以别用临时数组。
+- 季风打开时持续出帧：全球视角 GPU 每帧约 6 ms（不开 4.5 ms），地形倾斜 50° 约 10 ms；内存约 400 MB。关掉后淡出完回到按需绘制。
 - 标签按需排进 16 MB 图集，满了清空重排；碰撞检测用网格。
 
 ## 命令
 
 - `xcodegen generate` 后构建；`scripts/install.sh` 装 Release 到 /Applications。
 - 着色器在 `Shanhai/Resources/Shaders.msl`，运行时编译。本机 Xcode 没装 Metal 工具链，不依赖它。
-- 截图调试：`open -n --env SHANHAI_PRINT_WINDOW=1 --env SHANHAI_CAMERA=纬,经,高度,倾斜,朝向 ...`，另有 `SHANHAI_MODE=terrain`、`SHANHAI_SELECT=纬,经`、`SHANHAI_HOVER=纬,经`、`SHANHAI_NOLABELS=1`、`SHANHAI_PRESS_3D=1`。**直接执行二进制不出窗口**（沙盒应用），要用 `open`。
+- 截图调试：`open -n --env SHANHAI_PRINT_WINDOW=1 --env SHANHAI_CAMERA=纬,经,高度,倾斜,朝向 ...`，另有 `SHANHAI_MODE=terrain`、`SHANHAI_SELECT=纬,经`、`SHANHAI_HOVER=纬,经`、`SHANHAI_NOLABELS=1`、`SHANHAI_PRESS_3D=1`、`SHANHAI_MONSOON=7`（打开季风停在 7 月）。**直接执行二进制不出窗口**（沙盒应用），要用 `open`。
 - 图标：`design/icon_shanhai.py` 程序绘制，`scripts/generate-icon.sh` 一步生成 icns。构图是海水江崖：团扇圆框里，青绿主峰从水纹中升起、冲出圆框，配朱日；山顶石青晕染到山脚石绿，不放文字。Felix 否掉过两轮：渲染地球四版太普通，罗盘、青绿、舆图三版是剪贴画。
 - 离屏渲染地球：`SHANHAI_ICON=容器内路径.png`（沙盒只能写 `~/Library/Containers/io.github.chengffei.shanhai/Data/tmp`）。
 

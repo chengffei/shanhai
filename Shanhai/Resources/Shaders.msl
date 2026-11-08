@@ -10,6 +10,7 @@ struct Uniforms {
     float4 params;     // x 地形夸张（半径/米） y 省界透明度 z 国界透明度 w 风格：0 普通 1 地形 2 复古
     uint4  sel;        // 选中省、选中国、悬停省、悬停国
     float4 viewport;   // 宽、高（像素）、缩放、海拔（半径）
+    float4 climate;    // x 季风图层不透明度 y 月份（0 = 1 月中，可带小数） zw 未用
 };
 
 constant float PI = 3.14159265358979;
@@ -54,12 +55,9 @@ vertex GlobeOut globe_vertex(uint vid [[vertex_id]],
     return o;
 }
 
-fragment float4 globe_fragment(GlobeOut in [[stage_in]],
-                               constant Uniforms &u [[buffer(1)]],
-                               texture2d<float> base [[texture(0)]],
-                               texture2d<uint> regionTex [[texture(1)]],
-                               texture2d<uint> countryTex [[texture(2)]],
-                               texture2d<float> heightTex [[texture(3)]]) {
+static float4 globe_shade(GlobeOut in, constant Uniforms &u,
+                          texture2d<float> base, texture2d<uint> regionTex,
+                          texture2d<uint> countryTex, texture2d<float> heightTex) {
     constexpr sampler s(filter::linear, mip_filter::linear, address::repeat, max_anisotropy(8));
     // 用 uv 的导数取 mip，经线接缝处 uv 跳变由网格重复列避免
     float3 color = base.sample(s, in.uv).rgb;
@@ -212,6 +210,187 @@ vertex LineOut line_vertex(uint vid [[vertex_id]],
 
 fragment float4 line_fragment(LineOut in [[stage_in]], constant float4 &color [[buffer(0)]]) {
     return float4(color.rgb * color.a, color.a);
+}
+
+// ---------- 季风图层 ----------
+// 逐月气候数据：rgba = 东向风、北向风（m/s）、降水（mm/天）、季风区指数（≥1 为季风区）
+// 3D 纹理第三维是月份，线性过滤 + repeat 让 12 月平滑过渡回 1 月
+constexpr sampler climSampler(filter::linear, s_address::repeat, t_address::clamp_to_edge, r_address::repeat);
+
+static float3 climCoord(float2 uv, float month) { return float3(uv, (month + 0.5) / 12.0); }
+
+fragment float4 globe_fragment(GlobeOut in [[stage_in]],
+                               constant Uniforms &u [[buffer(1)]],
+                               texture2d<float> base [[texture(0)]],
+                               texture2d<uint> regionTex [[texture(1)]],
+                               texture2d<uint> countryTex [[texture(2)]],
+                               texture2d<float> heightTex [[texture(3)]],
+                               texture3d<float> clim [[texture(4)]]) {
+    float4 c = globe_shade(in, u, base, regionTex, countryTex, heightTex);
+    float on = u.climate.x;
+    if (on <= 0.001) return c;
+    float4 k = clim.sample(climSampler, climCoord(in.uv, u.climate.y));
+    int st = styleOf(u);
+    float3 col = c.rgb;
+    // 底图褪一点色，让雨带和风线读得出来
+    float lum = dot(col, float3(0.299, 0.587, 0.114));
+    col = mix(col, float3(lum), (st == 1 ? 0.2 : 0.35) * on);
+    // 降水：2 mm/天以下不着色，12 mm/天到最深
+    float3 rain = st == 0 ? float3(0.04, 0.36, 0.88) : (st == 1 ? float3(0.28, 0.68, 1.0) : (st == 2 ? float3(0.10, 0.30, 0.40) : float3(0.28, 0.74, 0.84)));
+    float ra = smoothstep(2.0, 12.0, k.z) * (st == 1 ? 0.42 : 0.62) * on;
+    col = mix(col, rain, ra);
+    // 季风区轮廓：指数 = 1 的等值线，屏幕上约 2 像素宽
+    float f = k.w;
+    float fw = max(fwidth(f), 1e-4);
+    float edge = (1.0 - smoothstep(0.7, 1.7, abs(f - 1.0) / fw)) * on;
+    float3 mc = st == 2 ? float3(0.62, 0.16, 0.08) : (st == 0 ? float3(0.90, 0.36, 0.08) : float3(1.0, 0.60, 0.22));
+    col = mix(col, mc, edge * 0.95);
+    return float4(col, c.a);
+}
+
+// 风的粒子：每个粒子留最近 K 个位置（单位球面坐标），所有粒子共用一个环形下标
+struct Particle { float4 info; };   // x 年龄（秒） y 寿命 z 风速 m/s w 未用
+
+struct WindParams {
+    float4 cap;     // xyz 生成区中心，w 生成区半径的余弦
+    float4 mv;      // x dt 秒 y 月份 z 每 (m/s) 每秒走多少弧度 w 帧随机种子
+    uint4  idx;     // x 本帧写入的环形下标 y K z 粒子数
+};
+
+static uint pcg(uint v) {
+    uint state = v * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+static float rnd(thread uint &s) { s = pcg(s); return float(s) / 4294967295.0; }
+
+static float2 sphereUV(float3 p) {
+    float lat = asin(clamp(p.y, -1.0, 1.0));
+    float lon = atan2(p.x, p.z);
+    return float2(lon / (2.0 * PI) + 0.5, 0.5 - lat / PI);
+}
+
+kernel void wind_step(uint id [[thread_position_in_grid]],
+                      device Particle *ps [[buffer(0)]],
+                      device float4 *trail [[buffer(1)]],
+                      constant WindParams &w [[buffer(2)]],
+                      texture3d<float> clim [[texture(0)]]) {
+    uint K = w.idx.y;
+    if (id >= w.idx.z) return;
+    uint head = w.idx.x;
+    uint prevSlot = (head + K - 1) % K;
+    Particle p = ps[id];
+    float3 pos = trail[id * K + prevSlot].xyz;
+    p.info.x += w.mv.x;
+    bool outside = dot(pos, w.cap.xyz) < w.cap.w || length(pos) < 0.5;
+    if (p.info.x > p.info.y || outside) {
+        // 在生成区（球冠）里均匀撒点
+        uint s = id * 9781u + as_type<uint>(w.mv.w);
+        float z = mix(w.cap.w, 1.0, rnd(s));
+        float a = rnd(s) * 2.0 * PI;
+        float r = sqrt(max(0.0, 1.0 - z * z));
+        float3 c = w.cap.xyz;
+        float3 t1 = normalize(abs(c.y) < 0.99 ? cross(c, float3(0, 1, 0)) : cross(c, float3(1, 0, 0)));
+        float3 t2 = cross(c, t1);
+        float3 np = normalize(c * z + (t1 * cos(a) + t2 * sin(a)) * r);
+        // 首次出生的寿命错开，免得整批同时消失
+        p.info = float4(outside && p.info.y == 0.0 ? rnd(s) * 2.0 : 0.0, 1.6 + rnd(s) * 2.4, 0.0, 0.0);
+        for (uint j = 0; j < K; j++) trail[id * K + j] = float4(np, 0.0);
+        ps[id] = p;
+        return;
+    }
+    float4 k = clim.sample(climSampler, climCoord(sphereUV(pos), w.mv.y), level(0));
+    float lonr = atan2(pos.x, pos.z);
+    float3 east = float3(cos(lonr), 0.0, -sin(lonr));
+    float3 north = normalize(cross(pos, east));
+    float3 v = east * k.x + north * k.y;
+    p.info.z = length(k.xy);
+    pos = normalize(pos + v * (w.mv.z * w.mv.x));
+    trail[id * K + head] = float4(pos, 0.0);
+    ps[id] = p;
+}
+
+struct WindOut {
+    float4 position [[position]];
+    float4 color;
+};
+
+vertex WindOut wind_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
+                           const device Particle *ps [[buffer(0)]],
+                           const device float4 *trail [[buffer(2)]],
+                           constant WindParams &w [[buffer(3)]],
+                           constant Uniforms &u [[buffer(1)]],
+                           texture2d<uint> countryTex [[texture(0)]]) {
+    uint K = w.idx.y;
+    uint j = vid >> 1;                         // 0 = 头（最新）
+    float side = (vid & 1) ? 1.0 : -1.0;
+    uint head = w.idx.x;
+    float3 p0 = trail[iid * K + (head + K - j) % K].xyz;
+    uint jn = j + 1 < K ? j + 1 : j - 1;
+    float3 p1 = trail[iid * K + (head + K - jn) % K].xyz;
+    float lift = 1.0 + 0.0015 + u.params.x * 2500.0;   // 地形视图抬高一点，免得钻进山里
+    float4 c0 = u.viewProj * float4(p0 * lift, 1.0);
+    float4 c1 = u.viewProj * float4(p1 * lift, 1.0);
+    float2 s0 = c0.xy / c0.w * u.viewport.xy, s1 = c1.xy / c1.w * u.viewport.xy;
+    float2 d = s0 - s1;
+    if (j + 1 >= K) d = -d;
+    float2 nrm = length(d) > 1e-4 ? normalize(float2(-d.y, d.x)) : float2(0.0);
+    float t = float(j) / float(K - 1);
+    float width = u.viewport.z * mix(1.1, 0.35, t);
+    WindOut o;
+    o.position = c0;
+    o.position.xy += nrm * side * width / u.viewport.xy * c0.w;
+
+    Particle pa = ps[iid];
+    float life = pa.info.y;
+    float fade = saturate(pa.info.x / 0.4) * saturate((life - pa.info.x) / 0.6);
+    float speedA = mix(0.35, 1.0, smoothstep(1.0, 7.0, pa.info.z));
+    float3 V = normalize(u.eye.xyz - p0);
+    float facing = smoothstep(0.02, 0.15, dot(p0, V));
+    float a = (1.0 - t * t) * 0.85 * fade * speedA * facing * u.climate.x;
+
+    // 按落在陆地还是海上换色：浅底用深色线，深底用浅色线
+    uint tw = countryTex.get_width(), th = countryTex.get_height();
+    float2 uv = sphereUV(p0);
+    uint cid = countryTex.read(uint2(min(uint(uv.x * tw), tw - 1), min(uint(uv.y * th), th - 1))).r;
+    int st = styleOf(u);
+    float3 col;
+    if (st == 1) col = float3(1.0);
+    else if (st == 2) col = cid != 0 ? float3(1.0, 0.92, 0.78) : float3(0.26, 0.12, 0.04);
+    else if (st == 3) col = cid != 0 ? float3(0.08, 0.05, 0.01) : float3(1.0, 0.86, 0.55);
+    else col = float3(0.06, 0.14, 0.32);
+    o.color = float4(col * a, a);
+    return o;
+}
+
+fragment float4 wind_fragment(WindOut in [[stage_in]]) { return in.color; }
+
+// 雨带中心线：每月 361 个纬度，按月份插值；虚线
+struct BandOut {
+    float4 position [[position]];
+    float along;
+};
+
+vertex BandOut band_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
+                           const device float *lats [[buffer(0)]],
+                           constant Uniforms &u [[buffer(1)]]) {
+    float m = u.climate.y;
+    uint m0 = uint(floor(m)) % 12, m1 = (m0 + 1) % 12;
+    float lat = mix(lats[m0 * 361 + vid], lats[m1 * 361 + vid], fract(m));
+    float lon = -180.0 + float(vid);
+    float3 n = spherePoint(lat * PI / 180.0, lon * PI / 180.0);
+    float3 p = n * (1.0 + 0.002 + u.params.x * 2500.0);
+    BandOut o;
+    o.position = u.viewProj * float4(p, 1.0);
+    o.position.xy += OFFSETS[iid] * 2.0 / u.viewport.xy * o.position.w;
+    o.along = float(vid);
+    return o;
+}
+
+fragment float4 band_fragment(BandOut in [[stage_in]], constant Uniforms &u [[buffer(1)]], constant float4 &color [[buffer(0)]]) {
+    float dash = step(fract(in.along / 4.0), 0.65);
+    float a = color.a * dash * u.climate.x;
+    return float4(color.rgb * a, a);
 }
 
 // ---------- 大气与背景 ----------

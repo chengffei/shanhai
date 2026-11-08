@@ -31,6 +31,7 @@ struct ShanhaiApp: App {
                     Button("搜索…") { c.searchRequest += 1 }.keyboardShortcut("f")
                     Button("回到整个地球") { c.home() }.keyboardShortcut("0")
                     Button("3D 视角") { c.toggle3D() }.keyboardShortcut("d")
+                    Button(c.climateOn ? "关闭季风" : "季风") { c.toggleClimate() }.keyboardShortcut("j")
                     Button("放大") { c.zoomAnimated(0.5) }.keyboardShortcut("=")
                     Button("缩小") { c.zoomAnimated(2) }.keyboardShortcut("-")
                     Divider()
