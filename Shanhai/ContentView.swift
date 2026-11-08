@@ -54,7 +54,7 @@ struct ContentView: View {
         }
         .animation(.smooth(duration: 0.2), value: controller.loadingStyle)
         .animation(.smooth(duration: 0.3), value: controller.climateOn)
-        .onChange(of: controller.searchRequest) { searchFocused = true }
+        .onChange(of: controller.searchRequest) { if !fullScreen { searchFocused = true } }
         .overlay(alignment: .bottomLeading) { HoverName(controller: controller).padding(16) }
         .overlay(alignment: .bottomTrailing) {
             MapControls(controller: controller)
@@ -75,21 +75,49 @@ struct ContentView: View {
                 ZStack(alignment: .top) {
                     HStack(spacing: 10) {
                         StylePicker(controller: controller)
-                        MonsoonToggle(controller: controller)
+                        MonsoonToggle(controller: controller, floating: true)
                     }
                         .tint(Color(red: controller.mode.linkColor.0, green: controller.mode.linkColor.1, blue: controller.mode.linkColor.2))
                         .padding(.horizontal, 10).padding(.vertical, 6)
                         .glassEffect(.regular, in: .capsule)
-                    HStack { Spacer(); FloatingSearch(controller: controller) }
+                    HStack(alignment: .top) {
+                        // 全屏时系统标题栏不出现，给一个退出全屏的按钮（也可「显示」菜单或 ⌃⌘F）
+                        Button { NSApp.keyWindow?.toggleFullScreen(nil) } label: {
+                            Image(systemName: "arrow.down.right.and.arrow.up.left")
+                                .font(.system(size: 13, weight: .semibold))
+                                .frame(width: 36, height: 36)
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .glassEffect(.regular.interactive(), in: .circle)
+                        .help("退出全屏（⌃⌘F）")
+                        Spacer()
+                        FloatingSearch(controller: controller)
+                    }
                 }
                 .padding(.horizontal, 16)
                 .modifier(BelowMenuBar())
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in fullScreen = true }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in
+            fullScreen = true
+            // 工具栏隐藏后，系统那条全屏工具栏窗口（菜单栏下方约 52 点高）还在，透明但会吃掉点击，
+            // 盖住浮动控件的上半截；让它不接收鼠标
+            for delay in [0.0, 0.3, 1.0] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    for w in NSApp.windows where String(describing: type(of: w)).contains("ToolbarFullScreen") {
+                        w.ignoresMouseEvents = true
+                    }
+                }
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in fullScreen = false }
         .toolbarVisibility(fullScreen ? .hidden : .visible, for: .windowToolbar)
-        .onAppear { DebugHooks.apply(controller) }
+        .onAppear {
+            // 上次全屏退出时会以全屏恢复，这时收不到进入全屏的通知
+            fullScreen = NSApp.windows.contains { $0.styleMask.contains(.fullScreen) }
+            DebugHooks.apply(controller)
+        }
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .toolbar {
             if !fullScreen {
@@ -148,6 +176,8 @@ struct StylePicker: View {
 /// 季风开关：打开时按当前风格的强调色填充
 struct MonsoonToggle: View {
     let controller: GlobeController
+    /// 浮在地球上时没有工具栏的底，关闭状态也要自带玻璃底
+    var floating = false
     var body: some View {
         Group {
         if controller.climateOn {
@@ -155,6 +185,11 @@ struct MonsoonToggle: View {
                 .buttonStyle(.glassProminent)
                 .tint(Color(red: controller.mode.linkColor.0, green: controller.mode.linkColor.1, blue: controller.mode.linkColor.2))
                 .labelStyle(.titleAndIcon)
+        } else if floating {
+            Button { controller.toggleClimate() } label: { Label("季风", systemImage: "wind") }
+                .labelStyle(.titleAndIcon)
+                .buttonStyle(.glass)
+                .tint(.primary)
         } else {
             Button { controller.toggleClimate() } label: { Label("季风", systemImage: "wind") }
                 .labelStyle(.titleAndIcon)
@@ -185,19 +220,28 @@ struct FloatingSearch: View {
     var body: some View {
         let hits = SearchIndex.shared(controller.geo).find(query)
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            // 输入框铺满整个胶囊（图标叠在上面且不接点击），点胶囊任何位置都能输入
+            ZStack(alignment: .leading) {
                 TextField("搜索国家、省份或城市", text: $query)
                     .textFieldStyle(.plain)
                     .focused($focused)
                     .onSubmit { if let h = hits.first { go(h) } }
                     .onExitCommand { query = ""; focused = false }
+                    .padding(.leading, 36).padding(.trailing, query.isEmpty ? 14 : 34)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    .padding(.leading, 14)
+                    .allowsHitTesting(false)
                 if !query.isEmpty {
-                    Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
-                        .buttonStyle(.plain)
+                    HStack {
+                        Spacer()
+                        Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                            .buttonStyle(.plain)
+                            .padding(.trailing, 12)
+                    }
                 }
             }
-            .padding(.horizontal, 14).frame(height: 36)
+            .frame(height: 36)
             .glassEffect(.regular, in: .capsule)
             if focused && !hits.isEmpty {
                 VStack(spacing: 0) {
@@ -471,6 +515,12 @@ enum DebugHooks {
         if let v = nums("SHANHAI_MONSOON"), let m = v.first {
             // SHANHAI_MONSOON=月份（1–12）：打开季风并停在该月
             c.climateOn = true; c.climatePlaying = env["SHANHAI_PLAY"] != nil; c.climateMonth = m - 1
+        }
+        if env["SHANHAI_FR"] != nil {
+            Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+                let w = NSApp.windows.first { $0.isVisible }
+                print("FR frames=\(NSApp.windows.map { NSStringFromRect($0.frame) + " ignore=\($0.ignoresMouseEvents) alpha=\($0.alphaValue)" }) key=\(NSApp.keyWindow.map { String(describing: type(of: $0)) } ?? "nil") active=\(NSApp.isActive) wins=\(NSApp.windows.map { String(describing: type(of: $0)) + ($0.isVisible ? "+" : "-") }) fr=\(w?.firstResponder.map { String(describing: type(of: $0)) } ?? "nil")"); fflush(stdout)
+            }
         }
         if env["SHANHAI_HOVER_STORM"] != nil {
             // 调试：模拟鼠标在地图上来回移动（120 Hz）
