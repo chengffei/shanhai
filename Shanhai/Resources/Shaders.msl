@@ -58,7 +58,8 @@ fragment float4 globe_fragment(GlobeOut in [[stage_in]],
                                constant Uniforms &u [[buffer(1)]],
                                texture2d<float> base [[texture(0)]],
                                texture2d<uint> regionTex [[texture(1)]],
-                               texture2d<uint> countryTex [[texture(2)]]) {
+                               texture2d<uint> countryTex [[texture(2)]],
+                               texture2d<float> heightTex [[texture(3)]]) {
     constexpr sampler s(filter::linear, mip_filter::linear, address::repeat, max_anisotropy(8));
     // 用 uv 的导数取 mip，经线接缝处 uv 跳变由网格重复列避免
     float3 color = base.sample(s, in.uv).rgb;
@@ -93,7 +94,24 @@ fragment float4 globe_fragment(GlobeOut in [[stage_in]],
         float shade = (0.70 + 0.38 * d) * (0.72 + 0.28 * rim);
         return float4(color * shade + float3(1.0, 0.86, 0.66) * spec, 1.0);
     }
-    float shade = style == 1 ? (0.62 + 0.45 * d) : (0.86 + 0.16 * d);
+    if (style == 1) {
+        // 地形：用高程算坡面法线，山有阴阳面；放大倍数与顶点位移一致
+        constexpr sampler hs(filter::linear, address::repeat);
+        float2 texel = 1.0 / float2(heightTex.get_width(), heightTex.get_height());
+        float lat = PI * 0.5 - in.uv.y * PI;
+        float he = max(heightTex.sample(hs, in.uv + float2(texel.x, 0)).r, 0.0) - max(heightTex.sample(hs, in.uv - float2(texel.x, 0)).r, 0.0);
+        float hn = max(heightTex.sample(hs, in.uv - float2(0, texel.y)).r, 0.0) - max(heightTex.sample(hs, in.uv + float2(0, texel.y)).r, 0.0);
+        float dx = 2.0 * texel.x * 2.0 * PI * max(cos(lat), 0.05);   // 东西向间距（弧度）
+        float dy = 2.0 * texel.y * PI;
+        float3 east = normalize(float3(cos(in.uv.x * 2.0 * PI - PI), 0.0, -sin(in.uv.x * 2.0 * PI - PI)));
+        float3 north = cross(n, east);
+        float k = u.params.x;                                        // 米 → 半径（含放大）
+        float3 nt = normalize(n - east * (he * k / dx) - north * (hn * k / dy));
+        float dt = max(dot(nt, L), 0.0);
+        float relief = mix(1.0, (0.35 + 0.8 * dt) / (0.35 + 0.8 * max(d, 0.25)), 0.85);
+        return float4(color * (0.62 + 0.45 * d) * relief, 1.0);
+    }
+    float shade = 0.86 + 0.16 * d;
     return float4(color * shade, 1.0);
 }
 

@@ -86,8 +86,9 @@ struct MapControls: View {
             Button { controller.home() } label: { Image(systemName: "globe.asia.australia") }
                 .help("回到整个地球")
             Button { controller.toggle3D() } label: { Text(controller.camera.tilt > 0.05 ? "2D" : "3D").font(.system(size: 13, weight: .semibold)) }
-                .help("倾斜视角，看山脉起伏（按住 Option 拖动也可以）")
+                .help(controller.camera.maxTilt < 0.2 ? "放大一些才能倾斜视角" : "倾斜视角看山脉起伏，地形视图下最明显（按住 Option 拖动也可以）")
                 .disabled(controller.camera.maxTilt < 0.2)
+                .opacity(controller.camera.maxTilt < 0.2 ? 0.4 : 1)
             if abs(controller.camera.heading) > 0.01 {
                 Button { controller.northUp() } label: {
                     Image(systemName: "location.north.line.fill").rotationEffect(.radians(-controller.camera.heading))

@@ -118,7 +118,7 @@ final class GlobeController {
 
     func toggle3D() {
         var c = camera
-        c.tilt = c.tilt > 0.05 ? 0 : min(c.maxTilt, 1.0)
+        c.tilt = c.tilt > 0.05 ? 0 : c.maxTilt
         animate(to: c)
     }
 

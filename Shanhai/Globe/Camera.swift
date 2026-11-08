@@ -17,10 +17,17 @@ struct Camera: Equatable {
 
     var showsProvinces: Bool { altitude < Camera.provinceAltitude }
 
-    /// 高度越低允许倾斜越大
+    /// 高度 1.5 以下开始允许倾斜，0.6 以下可到 60°
     var maxTilt: Double {
-        let t = (log(Camera.maxAltitude / 2) - log(altitude)) / (log(Camera.maxAltitude / 2) - log(Camera.minAltitude))
-        return max(0, min(1, t)) * 1.15
+        let t = (log(1.5) - log(altitude)) / (log(1.5) - log(0.6))
+        return max(0, min(1, t)) * (60 * .pi / 180)
+    }
+
+    /// 地形起伏放大倍数：近处 3 倍接近真实，远处放大到 25 倍，否则山脉在大尺度下看不出来
+    var reliefExaggeration: Double {
+        let t = max(0, min(1, (altitude - 0.05) / (1.0 - 0.05)))
+        let s = t * t * (3 - 2 * t)
+        return 3 + 22 * s
     }
 
     mutating func clamp() {

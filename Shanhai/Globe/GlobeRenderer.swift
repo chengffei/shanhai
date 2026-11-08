@@ -32,9 +32,9 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
     private var depthOn: MTLDepthStencilState!
     private var depthRead: MTLDepthStencilState!
     private var depthOff: MTLDepthStencilState!
-    private var meshUV: MTLBuffer!
-    private var meshIndex: MTLBuffer!
-    private var meshIndexCount = 0
+    private struct Mesh { let uv: MTLBuffer; let index: MTLBuffer; let count: Int }
+    private var smoothMesh: Mesh!      // 512×256：没有起伏时球面够圆
+    private var reliefMesh: Mesh!      // 2048×1024：地形视图，约 20 km 一格
     private var political: MTLTexture!
     private var physical: MTLTexture?
     private var vintage: MTLTexture?
@@ -50,7 +50,7 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
             let loader = MTKTextureLoader(device: device), dir = geoDir
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 let t = try? GlobeRenderer.loadBase(loader, dir, "vintage")
-                DispatchQueue.main.async { self?.vintage = t; self?.controller?.requestRedraw() }
+                DispatchQueue.main.async { self?.vintage = t; self?.controller?.requestRedraw(); malloc_zone_pressure_relief(nil, 0) }
             }
         }
         return nil
@@ -109,7 +109,8 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
         labelBuffer = device.makeBuffer(length: MemoryLayout<LabelInstance>.stride * GlobeRenderer.maxLabels, options: .storageModeShared)!
         super.init()
         try buildPipelines(view: view)
-        buildMesh(columns: 1024, rows: 512)
+        smoothMesh = buildMesh(columns: 512, rows: 256)
+        reliefMesh = buildMesh(columns: 2048, rows: 1024)
         let loader = MTKTextureLoader(device: device)
         let geoDir = Bundle.main.resourceURL!.appendingPathComponent("Geo")
         political = try GlobeRenderer.loadBase(loader, geoDir, "political")
@@ -120,6 +121,8 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
             DispatchQueue.main.async {
                 self?.physical = phys
                 self?.controller?.requestRedraw()
+                // 加载与建网格时的大块临时内存已释放，但分配器会留着；主动还给系统
+                malloc_zone_pressure_relief(nil, 0)
             }
         }
     }
@@ -167,24 +170,28 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
         depthOff = device.makeDepthStencilState(descriptor: dd)
     }
 
-    private func buildMesh(columns: Int, rows: Int) {
-        var uv = [SIMD2<Float>]()
-        uv.reserveCapacity((columns + 1) * (rows + 1))
+    /// 经纬网格，直接写进共享显存，不留临时数组（2048×1024 的索引有 50 MB）
+    private func buildMesh(columns: Int, rows: Int) -> Mesh {
+        let nv = (columns + 1) * (rows + 1), ni = columns * rows * 6
+        let uvBuf = device.makeBuffer(length: nv * 8, options: .storageModeShared)!
+        let idxBuf = device.makeBuffer(length: ni * 4, options: .storageModeShared)!
+        let uv = uvBuf.contents().bindMemory(to: SIMD2<Float>.self, capacity: nv)
+        var k = 0
         for r in 0...rows {
-            for c in 0...columns { uv.append(SIMD2(Float(c) / Float(columns), Float(r) / Float(rows))) }
+            for c in 0...columns { uv[k] = SIMD2(Float(c) / Float(columns), Float(r) / Float(rows)); k += 1 }
         }
-        var idx = [UInt32]()
-        idx.reserveCapacity(columns * rows * 6)
+        let idx = idxBuf.contents().bindMemory(to: UInt32.self, capacity: ni)
         let stride = UInt32(columns + 1)
+        k = 0
         for r in 0..<UInt32(rows) {
             for c in 0..<UInt32(columns) {
                 let a = r * stride + c, b = a + 1, d = a + stride, e = d + 1
-                idx += [a, d, b, b, d, e]
+                idx[k] = a; idx[k + 1] = d; idx[k + 2] = b
+                idx[k + 3] = b; idx[k + 4] = d; idx[k + 5] = e
+                k += 6
             }
         }
-        meshUV = device.makeBuffer(bytes: uv, length: uv.count * 8, options: .storageModeShared)
-        meshIndex = device.makeBuffer(bytes: idx, length: idx.count * 4, options: .storageModeShared)
-        meshIndexCount = idx.count
+        return Mesh(uv: uvBuf, index: idxBuf, count: ni)
     }
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) { controller?.requestRedraw() }
@@ -218,7 +225,7 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
         u.eye = SIMD4(Float(e.x), Float(e.y), Float(e.z), 0)
         let l = simd_normalize(f.eye - f.target * 0.2 + f.up * 0.6 - simd_cross(f.up, f.eye) * 0.4)
         u.light = SIMD4(Float(l.x), Float(l.y), Float(l.z), 0)
-        u.params = SIMD4(terrain ? 3.0 / 6_371_000 : 0, regionLineAlpha(cam), 0.55, terrain ? 1 : 0)
+        u.params = SIMD4(terrain ? Float(cam.reliefExaggeration / 6_371_000) : 0, regionLineAlpha(cam), 0.55, terrain ? 1 : 0)
         u.sel = SIMD4(UInt32(selRegion), UInt32(selCountry), 0, 0)
         u.viewport = SIMD4(Float(size), Float(size), 2, Float(cam.altitude))
 
@@ -232,12 +239,14 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
         }
         enc.setRenderPipelineState(globePSO); enc.setDepthStencilState(depthOn)
         enc.setCullMode(.back); enc.setFrontFacing(.counterClockwise)
-        enc.setVertexBuffer(meshUV, offset: 0, index: 0)
+        let mesh = terrain ? reliefMesh! : smoothMesh!
+        enc.setVertexBuffer(mesh.uv, offset: 0, index: 0)
         enc.setVertexTexture(geo.heightTexture, index: 0)
         enc.setFragmentTexture(terrain ? physical! : political, index: 0)
         enc.setFragmentTexture(geo.regionTexture, index: 1)
         enc.setFragmentTexture(geo.countryTexture, index: 2)
-        enc.drawIndexedPrimitives(type: .triangle, indexCount: meshIndexCount, indexType: .uint32, indexBuffer: meshIndex, indexBufferOffset: 0)
+        enc.setFragmentTexture(geo.heightTexture, index: 3)
+        enc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.count, indexType: .uint32, indexBuffer: mesh.index, indexBufferOffset: 0)
         enc.setCullMode(.none); enc.setRenderPipelineState(linePSO); enc.setDepthStencilState(depthRead)
         enc.setVertexBuffer(geo.borderVertices, offset: 0, index: 0)
         func lines(_ range: Range<Int>, color: SIMD4<Float>, width: Int) {
@@ -293,7 +302,7 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
         let f = cam.frame
         let l = simd_normalize(f.eye - f.target * 0.2 + f.up * 0.6 - simd_cross(f.up, f.eye) * 0.4)
         u.light = SIMD4(Float(l.x), Float(l.y), Float(l.z), 0)
-        let exaggeration: Float = terrain ? 3.0 / 6_371_000 : 0
+        let exaggeration: Float = terrain ? Float(cam.reliefExaggeration / 6_371_000) : 0
         u.params = SIMD4(exaggeration, regionLineAlpha(cam), 0.55, style)
         u.sel = SIMD4(UInt32(controller.selectedRegion), UInt32(controller.selectedCountry), UInt32(controller.hoverRegion), UInt32(controller.hoverCountry))
         u.viewport = SIMD4(Float(size.width), Float(size.height), Float(scale), Float(cam.altitude))
@@ -313,12 +322,14 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
         enc.setDepthStencilState(depthOn)
         enc.setCullMode(.back)
         enc.setFrontFacing(.counterClockwise)
-        enc.setVertexBuffer(meshUV, offset: 0, index: 0)
+        let mesh = terrain ? reliefMesh! : smoothMesh!
+        enc.setVertexBuffer(mesh.uv, offset: 0, index: 0)
         enc.setVertexTexture(geo.heightTexture, index: 0)
         enc.setFragmentTexture(baseTex, index: 0)
         enc.setFragmentTexture(geo.regionTexture, index: 1)
         enc.setFragmentTexture(geo.countryTexture, index: 2)
-        enc.drawIndexedPrimitives(type: .triangle, indexCount: meshIndexCount, indexType: .uint32, indexBuffer: meshIndex, indexBufferOffset: 0)
+        enc.setFragmentTexture(geo.heightTexture, index: 3)
+        enc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.count, indexType: .uint32, indexBuffer: mesh.index, indexBufferOffset: 0)
 
         enc.setCullMode(.none)
         if style == 2 && cam.altitude > 1.5 { drawRings(enc, cam) }

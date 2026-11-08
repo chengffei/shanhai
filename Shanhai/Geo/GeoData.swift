@@ -62,8 +62,9 @@ final class GeoData {
     let cities: [City]                // 按重要性排好
     let marine: [Marine]              // 海洋、海、湾，按重要性排好
     let idWidth: Int, idHeight: Int
-    let regionIDs: MTLBuffer          // uint16，行优先，(0,0) 在西北角
-    let countryIDs: MTLBuffer         // uint8
+    let idBuffer: MTLBuffer           // 前半 uint16 省 ID，后半 uint8 国家 ID；行优先，(0,0) 在西北角
+    let countryOffset: Int
+    private let heightBuffer: MTLBuffer
     let regionTexture: MTLTexture
     let countryTexture: MTLTexture
     let borderVertices: MTLBuffer     // float2 (lon, lat) 度
@@ -81,28 +82,25 @@ final class GeoData {
         marine = try dec.decode([Marine].self, from: Data(contentsOf: dir.appendingPathComponent("marine.json")))
 
         // ID 栅格：头 8 字节宽高，之后 raw deflate
-        let ids = try Data(contentsOf: dir.appendingPathComponent("ids.bin"))
+        let ids = try Data(contentsOf: dir.appendingPathComponent("ids.bin"), options: .alwaysMapped)
         let (w, h) = ids.withUnsafeBytes { ($0.load(fromByteOffset: 0, as: UInt32.self), $0.load(fromByteOffset: 4, as: UInt32.self)) }
         idWidth = Int(w); idHeight = Int(h)
         let n = idWidth * idHeight
-        let raw = try GeoData.inflate(ids.dropFirst(8), expected: n * 3)
-        let rb = device.makeBuffer(length: n * 2, options: .storageModeShared)!
-        let cb = device.makeBuffer(length: n, options: .storageModeShared)!
-        raw.withUnsafeBytes { p in
-            memcpy(rb.contents(), p.baseAddress!, n * 2)
-            memcpy(cb.contents(), p.baseAddress! + n * 2, n)
-        }
-        regionIDs = rb
-        countryIDs = cb
+        // 直接解压进一块共享显存：前 2n 字节是省 ID，后 n 字节是国家 ID。不经过临时内存，
+        // 否则 96 MB 的临时缓冲释放后会被分配器留着不还
+        let buf = device.makeBuffer(length: n * 3, options: .storageModeShared)!
+        try GeoData.inflate(ids.dropFirst(8), into: buf.contents(), expected: n * 3)
+        idBuffer = buf
+        countryOffset = n * 2
         let rd = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r16Uint, width: idWidth, height: idHeight, mipmapped: false)
         rd.storageMode = .shared; rd.usage = .shaderRead
-        regionTexture = rb.makeTexture(descriptor: rd, offset: 0, bytesPerRow: idWidth * 2)!
+        regionTexture = buf.makeTexture(descriptor: rd, offset: 0, bytesPerRow: idWidth * 2)!
         let cd = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r8Uint, width: idWidth, height: idHeight, mipmapped: false)
         cd.storageMode = .shared; cd.usage = .shaderRead
-        countryTexture = cb.makeTexture(descriptor: cd, offset: 0, bytesPerRow: idWidth)!
+        countryTexture = buf.makeTexture(descriptor: cd, offset: n * 2, bytesPerRow: idWidth)!
 
         // 边界线
-        let b = try Data(contentsOf: dir.appendingPathComponent("borders.bin"))
+        let b = try Data(contentsOf: dir.appendingPathComponent("borders.bin"), options: .alwaysMapped)
         let hdr = b.withUnsafeBytes { p in (0..<6).map { Int(p.load(fromByteOffset: $0 * 4, as: UInt32.self)) } }
         let nv = hdr[0], ni = hdr[1]
         countryLineRange = hdr[2]..<(hdr[2] + hdr[3])
@@ -113,18 +111,18 @@ final class GeoData {
         borderIndices = bi
 
         // 高程 → half
-        let hd = try Data(contentsOf: dir.appendingPathComponent("height.bin"))
+        let hd = try Data(contentsOf: dir.appendingPathComponent("height.bin"), options: .alwaysMapped)
         let (hw, hh) = hd.withUnsafeBytes { (Int($0.load(fromByteOffset: 0, as: UInt32.self)), Int($0.load(fromByteOffset: 4, as: UInt32.self))) }
-        let hraw = try GeoData.inflate(hd.dropFirst(8), expected: hw * hh * 2)
-        var half = [Float16](repeating: 0, count: hw * hh)
-        hraw.withUnsafeBytes { p in
-            let s = p.bindMemory(to: Int16.self)
-            for i in 0..<(hw * hh) { half[i] = Float16(Float(s[i])) }
-        }
+        // 同样直接解压进共享显存，再原地把 Int16 改写成 Float16（同为 2 字节）
+        let hbuf = device.makeBuffer(length: hw * hh * 2, options: .storageModeShared)!
+        try GeoData.inflate(hd.dropFirst(8), into: hbuf.contents(), expected: hw * hh * 2)
+        let src = hbuf.contents().bindMemory(to: Int16.self, capacity: hw * hh)
+        let dst = UnsafeMutableRawPointer(src).bindMemory(to: Float16.self, capacity: hw * hh)
+        for i in 0..<(hw * hh) { let v = src[i]; dst[i] = Float16(Float(v)) }
         let td = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r16Float, width: hw, height: hh, mipmapped: false)
-        td.usage = .shaderRead
-        heightTexture = device.makeTexture(descriptor: td)!
-        heightTexture.replace(region: MTLRegionMake2D(0, 0, hw, hh), mipmapLevel: 0, withBytes: half, bytesPerRow: hw * 2)
+        td.usage = .shaderRead; td.storageMode = .shared
+        heightBuffer = hbuf
+        heightTexture = hbuf.makeTexture(descriptor: td, offset: 0, bytesPerRow: hw * 2)!
     }
 
     func country(_ id: Int) -> Country? { id > 0 && id <= countries.count ? countries[id - 1] : nil }
@@ -136,20 +134,16 @@ final class GeoData {
         if x < 0 { x += idWidth }
         let y = min(idHeight - 1, max(0, Int(((90 - lat) / 180 * Double(idHeight)).rounded(.down))))
         let i = y * idWidth + x
-        let r = regionIDs.contents().load(fromByteOffset: i * 2, as: UInt16.self)
-        let c = countryIDs.contents().load(fromByteOffset: i, as: UInt8.self)
+        let r = idBuffer.contents().load(fromByteOffset: i * 2, as: UInt16.self)
+        let c = idBuffer.contents().load(fromByteOffset: countryOffset + i, as: UInt8.self)
         return (Int(r), Int(c))
     }
 
-    static func inflate(_ data: Data, expected: Int) throws -> Data {
-        var out = Data(count: expected)
-        let written = out.withUnsafeMutableBytes { dst in
-            data.withUnsafeBytes { src in
-                compression_decode_buffer(dst.bindMemory(to: UInt8.self).baseAddress!, expected,
-                                          src.bindMemory(to: UInt8.self).baseAddress!, data.count, nil, COMPRESSION_ZLIB)
-            }
+    static func inflate(_ data: Data, into dst: UnsafeMutableRawPointer, expected: Int) throws {
+        let written = data.withUnsafeBytes { src in
+            compression_decode_buffer(dst.assumingMemoryBound(to: UInt8.self), expected,
+                                      src.bindMemory(to: UInt8.self).baseAddress!, data.count, nil, COMPRESSION_ZLIB)
         }
         guard written == expected else { throw NSError(domain: "GeoData", code: 1, userInfo: [NSLocalizedDescriptionKey: "inflate \(written)/\(expected)"]) }
-        return out
     }
 }
