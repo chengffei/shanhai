@@ -16,7 +16,7 @@ Image.MAX_IMAGE_PIXELS = None
 ROOT = Path(__file__).resolve().parent.parent
 RAW = ROOT / "data/raw"
 WORK = ROOT / "data/work"
-OUT = ROOT / "Meridian/Resources/Geo"
+OUT = ROOT / "Shanhai/Resources/Geo"
 TC = "/Applications/Xcode.app/Contents/Developer/usr/bin/TextureConverter"
 W, H = 16384, 8192
 Z, N = 6, 64           # z6：64×64 张 256 像素瓦片 = 16384² 墨卡托

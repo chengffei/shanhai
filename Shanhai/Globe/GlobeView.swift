@@ -23,7 +23,7 @@ struct GlobeView: NSViewRepresentable {
             controller.view = v
             controller.renderer = r
         } catch {
-            NSLog("Meridian renderer init failed: \(error)")
+            NSLog("Shanhai renderer init failed: \(error)")
         }
         return v
     }

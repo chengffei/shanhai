@@ -1,4 +1,5 @@
 import SwiftUI
+import ImageIO
 
 struct ContentView: View {
     @Bindable var controller: GlobeController
@@ -182,23 +183,39 @@ final class SearchIndex {
     }
 }
 
-/// 调试用：MERIDIAN_CAMERA="纬,经,高度,倾斜度数,朝向度数"  MERIDIAN_MODE=terrain  MERIDIAN_SELECT="纬,经"
-/// MERIDIAN_HOVER="纬,经"；启动 1 秒后在标准输出打印 WINDOW <窗口号>
+/// 调试用：SHANHAI_CAMERA="纬,经,高度,倾斜度数,朝向度数"  SHANHAI_MODE=terrain  SHANHAI_SELECT="纬,经"
+/// SHANHAI_HOVER="纬,经"；启动 1 秒后在标准输出打印 WINDOW <窗口号>
 enum DebugHooks {
     static func apply(_ c: GlobeController) {
         let env = ProcessInfo.processInfo.environment
         func nums(_ k: String) -> [Double]? { env[k].map { $0.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) } } }
-        if let v = nums("MERIDIAN_CAMERA"), v.count >= 3 {
+        if let v = nums("SHANHAI_CAMERA"), v.count >= 3 {
             var cam = Camera(lat: v[0], lon: v[1], altitude: v[2])
             if v.count > 3 { cam.tilt = v[3] * .pi / 180 }
             if v.count > 4 { cam.heading = v[4] * .pi / 180 }
             cam.clamp()
             c.camera = cam
         }
-        if env["MERIDIAN_MODE"] == "terrain" { c.mode = .terrain }
-        if let v = nums("MERIDIAN_SELECT"), v.count == 2 { c.select(lat: v[0], lon: v[1]) }
-        if let v = nums("MERIDIAN_HOVER"), v.count == 2 { c.hover(lat: v[0], lon: v[1]) }
-        if env["MERIDIAN_PRINT_WINDOW"] != nil {
+        if env["SHANHAI_MODE"] == "terrain" { c.mode = .terrain }
+        if let v = nums("SHANHAI_SELECT"), v.count == 2 { c.select(lat: v[0], lon: v[1]) }
+        if let v = nums("SHANHAI_HOVER"), v.count == 2 { c.hover(lat: v[0], lon: v[1]) }
+        // SHANHAI_ICON=输出.png：离屏渲染一张 2048² 地球后退出（SHANHAI_SKY=1 带太空背景）
+        if let out = env["SHANHAI_ICON"] {
+            func attempt() {
+                guard let r = c.renderer, r.physicalReady else {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: attempt); return
+                }
+                if let img = r.snapshot(camera: c.camera, terrain: c.mode == .terrain, selRegion: c.selectedRegion, selCountry: c.selectedCountry,
+                                        size: 2048, sky: env["SHANHAI_SKY"] == "1"),
+                   let dest = CGImageDestinationCreateWithURL(URL(fileURLWithPath: out) as CFURL, "public.png" as CFString, 1, nil) {
+                    CGImageDestinationAddImage(dest, img, nil)
+                    CGImageDestinationFinalize(dest)
+                }
+                exit(0)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: attempt)
+        }
+        if env["SHANHAI_PRINT_WINDOW"] != nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                 if let w = NSApp.windows.first(where: { $0.isVisible }) { print("WINDOW", w.windowNumber); fflush(stdout) }
             }

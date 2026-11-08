@@ -1,11 +1,11 @@
 import SwiftUI
 
 @main
-struct MeridianApp: App {
+struct ShanhaiApp: App {
     @State private var controller: GlobeController? = {
         guard let device = MTLCreateSystemDefaultDevice() else { return nil }
         do { return GlobeController(geo: try GeoData(device: device)) } catch {
-            NSLog("Meridian geo load failed: \(error)")
+            NSLog("Shanhai geo load failed: \(error)")
             return nil
         }
     }()

@@ -1,4 +1,6 @@
-# Meridian NOTES
+# 山海 NOTES
+
+11-08 由 Meridian 改名为山海（取自《山海经》），目录 personal/shanhai，Bundle ID io.github.chengffei.shanhai，装为 /Applications/山海.app。
 
 原生 macOS 地球仪，做给妻子（对地理零基础但有兴趣）。2026-11-08 建。自用，不开源，不发版，不占 WIP。
 
@@ -49,9 +51,10 @@
 ## 命令
 
 - `xcodegen generate` 后构建；`scripts/install.sh` 装 Release 到 /Applications。
-- 着色器在 `Meridian/Resources/Shaders.msl`，运行时编译。本机 Xcode 没装 Metal 工具链，不依赖它。
-- 截图调试：`open -n --env MERIDIAN_PRINT_WINDOW=1 --env MERIDIAN_CAMERA=纬,经,高度,倾斜,朝向 ...`，另有 `MERIDIAN_MODE=terrain`、`MERIDIAN_SELECT=纬,经`、`MERIDIAN_HOVER=纬,经`、`MERIDIAN_NOLABELS=1`。**直接执行二进制不出窗口**（沙盒应用），要用 `open`。
-- 图标：`design/globe_render.png`（App 自己渲染、无标签）→ `design/make_icon.py` → `scripts/generate-icon.sh`。
+- 着色器在 `Shanhai/Resources/Shaders.msl`，运行时编译。本机 Xcode 没装 Metal 工具链，不依赖它。
+- 截图调试：`open -n --env SHANHAI_PRINT_WINDOW=1 --env SHANHAI_CAMERA=纬,经,高度,倾斜,朝向 ...`，另有 `SHANHAI_MODE=terrain`、`SHANHAI_SELECT=纬,经`、`SHANHAI_HOVER=纬,经`、`SHANHAI_NOLABELS=1`。**直接执行二进制不出窗口**（沙盒应用），要用 `open`。
+- 图标：`design/icon_shanhai.py` 程序绘制，`scripts/generate-icon.sh` 一步生成 icns。构图是海水江崖：团扇圆框里，青绿主峰从水纹中升起、冲出圆框，配朱日；山顶石青晕染到山脚石绿，不放文字。Felix 否掉过两轮：渲染地球四版太普通，罗盘、青绿、舆图三版是剪贴画。
+- 离屏渲染地球：`SHANHAI_ICON=容器内路径.png`（沙盒只能写 `~/Library/Containers/io.github.chengffei.shanhai/Data/tmp`）。
 
 ## 待做
 

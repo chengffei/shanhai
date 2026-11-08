@@ -1,4 +1,4 @@
-"""抓取每个国家与省级区的内容，生成 Meridian/Resources/Content/<国家a3>.json。
+"""抓取每个国家与省级区的内容，生成 Shanhai/Resources/Content/<国家a3>.json。
 
 来源：
   Wikidata  基本资料（首府、人口、面积、语言、货币）、名人（出生地或工作地落在该区）、历史事件（有坐标和日期）
@@ -17,12 +17,12 @@ from opencc import OpenCC
 T2S = OpenCC("t2s").convert   # Wikidata 的 zh 标签繁简混杂，统一成简体
 
 ROOT = Path(__file__).resolve().parent.parent
-GEO = ROOT / "Meridian/Resources/Geo"
-OUT = ROOT / "Meridian/Resources/Content"
+GEO = ROOT / "Shanhai/Resources/Geo"
+OUT = ROOT / "Shanhai/Resources/Content"
 WORK = ROOT / "data/work"
 OUT.mkdir(parents=True, exist_ok=True)
 WORK.mkdir(parents=True, exist_ok=True)
-UA = {"User-Agent": "Meridian/0.1 (personal offline globe; https://github.com/chengffei)"}
+UA = {"User-Agent": "Shanhai/0.1 (personal offline globe; https://github.com/chengffei)"}
 S = requests.Session(); S.headers.update(UA)
 lock = threading.Lock()
 

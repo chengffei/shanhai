@@ -160,8 +160,81 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) { controller?.requestRedraw() }
 
-    // MERIDIAN_PERF=1：持续自转并每 2 秒打印帧耗时
-    private let perf = ProcessInfo.processInfo.environment["MERIDIAN_PERF"] != nil
+    var physicalReady: Bool { physical != nil }
+
+    /// 离屏渲染一张正方形地球（做图标用）：不画标签；sky = false 时背景透明
+    func snapshot(camera cam: Camera, terrain wantTerrain: Bool, selRegion: Int, selCountry: Int, size: Int, sky: Bool) -> CGImage? {
+        let terrain = wantTerrain && physical != nil
+        let rd = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: size, height: size, mipmapped: false)
+        rd.usage = [.renderTarget, .shaderRead]; rd.storageMode = .shared
+        guard let target = device.makeTexture(descriptor: rd) else { return nil }
+        let md = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: size, height: size, mipmapped: false)
+        md.textureType = .type2DMultisample; md.sampleCount = GlobeRenderer.samples; md.usage = .renderTarget; md.storageMode = .private
+        let dd = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .depth32Float, width: size, height: size, mipmapped: false)
+        dd.textureType = .type2DMultisample; dd.sampleCount = GlobeRenderer.samples; dd.usage = .renderTarget; dd.storageMode = .private
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = device.makeTexture(descriptor: md)
+        pass.colorAttachments[0].resolveTexture = target
+        pass.colorAttachments[0].loadAction = .clear
+        pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+        pass.colorAttachments[0].storeAction = .multisampleResolve
+        pass.depthAttachment.texture = device.makeTexture(descriptor: dd)
+        pass.depthAttachment.loadAction = .clear; pass.depthAttachment.clearDepth = 1; pass.depthAttachment.storeAction = .dontCare
+
+        let m = cam.matrices(aspect: 1)
+        let vp = m.proj * m.view
+        let e = cam.frame.eye, f = cam.frame
+        var u = Uniforms()
+        u.viewProj = vp.float; u.invViewProj = vp.inverse.float
+        u.eye = SIMD4(Float(e.x), Float(e.y), Float(e.z), 0)
+        let l = simd_normalize(f.eye - f.target * 0.2 + f.up * 0.6 - simd_cross(f.up, f.eye) * 0.4)
+        u.light = SIMD4(Float(l.x), Float(l.y), Float(l.z), 0)
+        u.params = SIMD4(terrain ? 3.0 / 6_371_000 : 0, regionLineAlpha(cam), 0.55, terrain ? 1 : 0)
+        u.sel = SIMD4(UInt32(selRegion), UInt32(selCountry), 0, 0)
+        u.viewport = SIMD4(Float(size), Float(size), 2, Float(cam.altitude))
+
+        let cb = queue.makeCommandBuffer()!
+        let enc = cb.makeRenderCommandEncoder(descriptor: pass)!
+        enc.setVertexBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)
+        enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 1)
+        if sky {
+            enc.setRenderPipelineState(skyPSO); enc.setDepthStencilState(depthOff)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        }
+        enc.setRenderPipelineState(globePSO); enc.setDepthStencilState(depthOn)
+        enc.setCullMode(.back); enc.setFrontFacing(.counterClockwise)
+        enc.setVertexBuffer(meshUV, offset: 0, index: 0)
+        enc.setVertexTexture(geo.heightTexture, index: 0)
+        enc.setFragmentTexture(terrain ? physical! : political, index: 0)
+        enc.setFragmentTexture(geo.regionTexture, index: 1)
+        enc.setFragmentTexture(geo.countryTexture, index: 2)
+        enc.drawIndexedPrimitives(type: .triangle, indexCount: meshIndexCount, indexType: .uint32, indexBuffer: meshIndex, indexBufferOffset: 0)
+        enc.setCullMode(.none); enc.setRenderPipelineState(linePSO); enc.setDepthStencilState(depthRead)
+        enc.setVertexBuffer(geo.borderVertices, offset: 0, index: 0)
+        func lines(_ range: Range<Int>, color: SIMD4<Float>, width: Int) {
+            guard !range.isEmpty else { return }
+            var c = color
+            enc.setFragmentBytes(&c, length: 16, index: 0)
+            enc.drawIndexedPrimitives(type: .lineStrip, indexCount: range.count, indexType: .uint32, indexBuffer: geo.borderIndices,
+                                      indexBufferOffset: range.lowerBound * 4, instanceCount: width)
+        }
+        let ink: SIMD3<Float> = terrain ? SIMD3(1, 1, 1) : SIMD3(0.25, 0.27, 0.32)
+        lines(geo.countryLineRange, color: SIMD4(ink, terrain ? 0.6 : 0.55), width: 2)
+        if let r = geo.region(selRegion) { for o in r.outline { lines(o[0]..<(o[0] + o[1]), color: SIMD4(0, 0.48, 1, 1), width: 9) } }
+        enc.endEncoding()
+        cb.commit(); cb.waitUntilCompleted()
+
+        var bytes = [UInt8](repeating: 0, count: size * size * 4)
+        target.getBytes(&bytes, bytesPerRow: size * 4, from: MTLRegionMake2D(0, 0, size, size), mipmapLevel: 0)
+        // 着色器输出预乘 alpha；天空不透明。BGRA → CGImage
+        let ctx = CGContext(data: &bytes, width: size, height: size, bitsPerComponent: 8, bytesPerRow: size * 4,
+                            space: CGColorSpaceCreateDeviceRGB(),
+                            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        return ctx?.makeImage()
+    }
+
+    // SHANHAI_PERF=1：持续自转并每 2 秒打印帧耗时
+    private let perf = ProcessInfo.processInfo.environment["SHANHAI_PERF"] != nil
     private var perfGPU: [Double] = [], perfCPU: [Double] = [], perfLast = CACurrentMediaTime()
 
     func draw(in view: MTKView) {
@@ -273,7 +346,7 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
 
     /// 每帧重排：按优先级（选中 > 国家 > 省 > 城市）贪心放置，互相不重叠
     private func updateLabels(camera: Camera, vp: simd_double4x4, size: CGSize, scale: CGFloat, terrain: Bool) {
-        guard let atlas, ProcessInfo.processInfo.environment["MERIDIAN_NOLABELS"] == nil else { labelCount = 0; return }
+        guard let atlas, ProcessInfo.processInfo.environment["SHANHAI_NOLABELS"] == nil else { labelCount = 0; return }
         let gen = atlas.generation
         layoutLabels(atlas: atlas, camera: camera, vp: vp, size: size, scale: scale)
         if atlas.generation != gen {

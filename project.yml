@@ -1,4 +1,4 @@
-name: Meridian
+name: Shanhai
 options:
   bundleIdPrefix: io.github.chengffei
   deploymentTarget:
@@ -9,31 +9,31 @@ settings:
     SWIFT_VERSION: "5.0"
     SWIFT_STRICT_CONCURRENCY: minimal
 targets:
-  Meridian:
+  Shanhai:
     type: application
     platform: macOS
     sources:
-      - path: Meridian
+      - path: Shanhai
         excludes: [Resources]
-      - path: Meridian/Resources/Geo
+      - path: Shanhai/Resources/Geo
         type: folder
         buildPhase: resources
-      - path: Meridian/Resources/Content
+      - path: Shanhai/Resources/Content
         type: folder
         buildPhase: resources
-      - path: Meridian/Resources/Shaders.msl
+      - path: Shanhai/Resources/Shaders.msl
         buildPhase: resources
-      - path: Meridian/Resources/AppIcon.icns
+      - path: Shanhai/Resources/AppIcon.icns
         buildPhase: resources
     entitlements:
-      path: Meridian/Meridian.entitlements
+      path: Shanhai/Shanhai.entitlements
       properties:
         com.apple.security.app-sandbox: true
     info:
-      path: Meridian/Info.plist
+      path: Shanhai/Info.plist
       properties:
-        CFBundleName: Meridian
-        CFBundleDisplayName: Meridian
+        CFBundleName: 山海
+        CFBundleDisplayName: 山海
         CFBundleIconFile: AppIcon
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
@@ -43,5 +43,5 @@ targets:
         NSHumanReadableCopyright: "© 2026 Felix"
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: io.github.chengffei.meridian
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.chengffei.shanhai
         CODE_SIGN_IDENTITY: "-"

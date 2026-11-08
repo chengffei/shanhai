@@ -1,6 +1,6 @@
 """把 Natural Earth 矢量与栅格加工成 App 用的离线地理数据。
 
-输出到 Meridian/Resources/Geo/：
+输出到 Shanhai/Resources/Geo/：
   countries.json  regions.json   国家与省级区划元数据
   ids.bin         zlib(raw deflate)：W*H 个 uint16 省级 ID，后接 W*H 个 uint8 国家 ID
   borders.bin     线框：float32 (lon,lat) 顶点 + uint32 索引（0xFFFFFFFF 断开）
@@ -23,7 +23,7 @@ from shapely.ops import unary_union
 Image.MAX_IMAGE_PIXELS = None
 ROOT = Path(__file__).resolve().parent.parent
 RAW = ROOT / "data/raw"
-OUT = ROOT / "Meridian/Resources/Geo"
+OUT = ROOT / "Shanhai/Resources/Geo"
 OUT.mkdir(parents=True, exist_ok=True)
 
 W, H = 8192, 4096          # ID 图与底图
