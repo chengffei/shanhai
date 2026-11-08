@@ -27,7 +27,7 @@ A native macOS globe in Chinese. Click any country or province to read about it.
 curl -fsSL https://raw.githubusercontent.com/chengffei/shanhai/main/install.sh | bash
 ```
 
-脚本会下载最新版，核对校验和与签名后装到「应用程序」。也可以在 [Releases](https://github.com/chengffei/shanhai/releases) 下载 dmg；App 没有经过 Apple 公证，第一次打开要在 Finder 里右键选「打开」。
+脚本会下载最新版，核对校验和与签名后装到「应用程序」。也可以在 [Releases](https://github.com/chengffei/shanhai/releases) 下载 dmg；App 没有经过 Apple 公证，dmg 版第一次打开会被系统拦下，要到「系统设置 › 隐私与安全性」里点「仍要打开」。
 
 ## 构建
 
