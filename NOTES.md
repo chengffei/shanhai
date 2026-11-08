@@ -36,7 +36,7 @@
 - 法、意、西、英的 admin-1 比省级细一级，按大区、自治区、构成国合并（`GROUP_BY`，Wikidata ID 已逐个核对）。
 - ID 栅格 8192×4096：uint16 省 + uint8 国。CPU 点选和 GPU 高亮共用一块共享内存。
 - 高程：AWS terrarium z4 瓦片，转成等经纬 4096×2048。
-- 卫星影像：EOX Sentinel-2 cloudless 2020，z6 瓦片。**CC BY-NC-SA 4.0，只能非商业使用**，面板底部要署名。
+- 卫星影像：EOX Sentinel-2 cloudless 2020，z6 瓦片。EOX 在南大洋和北冰洋有 544 张无数据瓦片（返回 1 位 PNG）；这些瓦片和 85° 以外的极区用 NE1 补，水面改成卫星深海色，接缝羽化 40 像素。**CC BY-NC-SA 4.0，只能非商业使用**，面板底部要署名。
 - 内容：名人走 QLever 的 Wikidata 镜像（官方 WDQS 这类全库查询必超时），取语言版本数 ≥20 的人，按出生地或工作地坐标落进 ID 栅格；事件取有坐标的 occurrence。
 
 ## 性能（11-08，M1 Pro，Release，2560×1640）
