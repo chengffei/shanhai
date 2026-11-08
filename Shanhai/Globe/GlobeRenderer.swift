@@ -39,7 +39,6 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
     private var physical: MTLTexture?
     private var vintage: MTLTexture?
     private var vintageLoading = false
-    private var ringPSO: MTLRenderPipelineState!
     private let geoDir = Bundle.main.resourceURL!.appendingPathComponent("Geo")
 
     /// 复古底图第一次用到时才后台加载（约 90 MB 显存）
@@ -160,7 +159,6 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
         linePSO = try pso("line_vertex", "line_fragment", blend: true)
         skyPSO = try pso("sky_vertex", "sky_fragment", blend: false)
         labelPSO = try pso("label_vertex", "label_fragment", blend: true)
-        ringPSO = try pso("ring_vertex", "ring_fragment", blend: false)
         let dd = MTLDepthStencilDescriptor()
         dd.depthCompareFunction = .less; dd.isDepthWriteEnabled = true
         depthOn = device.makeDepthStencilState(descriptor: dd)
@@ -332,7 +330,6 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
         enc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.count, indexType: .uint32, indexBuffer: mesh.index, indexBufferOffset: 0)
 
         enc.setCullMode(.none)
-        if style == 2 && cam.altitude > 1.5 { drawRings(enc, cam) }
         enc.setRenderPipelineState(linePSO)
         enc.setDepthStencilState(depthRead)
         enc.setVertexBuffer(geo.borderVertices, offset: 0, index: 0)
@@ -376,29 +373,6 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
             }
         }
         cb.commit()
-    }
-
-    /// 两道黄铜环：相对视角固定（像桌面地球仪的支架），地球在环里转
-    private func drawRings(_ enc: MTLRenderCommandEncoder, _ cam: Camera) {
-        struct RingParams { var a: SIMD4<Float>; var b: SIMD4<Float>; var c: SIMD4<Float> }
-        let f = cam.frame
-        let z = simd_normalize(f.eye)
-        let x = simd_normalize(simd_cross(f.up, z)), y = simd_cross(z, x)
-        func ring(tilt deg: Double, open: Double, radius: Float) -> RingParams {
-            let t = deg * .pi / 180
-            let a = x * cos(t) + y * sin(t)                 // 屏幕内的长轴
-            let perp = -x * sin(t) + y * cos(t)
-            let b = simd_normalize(z * cos(open) + perp * sin(open))   // open 越大，椭圆越圆
-            func v(_ d: SIMD3<Double>) -> SIMD4<Float> { SIMD4(Float(d.x), Float(d.y), Float(d.z), 0) }
-            return RingParams(a: v(a), b: v(b), c: SIMD4(radius, 0.0068, 0, 0))
-        }
-        enc.setRenderPipelineState(ringPSO)
-        enc.setDepthStencilState(depthOn)
-        let verts = 256 * 2 * 11
-        for var r in [ring(tilt: 66, open: 0.55, radius: 1.10), ring(tilt: -12, open: 0.30, radius: 1.17)] {
-            enc.setVertexBytes(&r, length: MemoryLayout<RingParams>.stride, index: 2)
-            enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: verts)
-        }
     }
 
     /// 省界在远处淡出，免得整个地球糊成一团线
