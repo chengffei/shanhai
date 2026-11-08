@@ -59,6 +59,8 @@
   - 底图改 BC1 KTX：省掉 JPG 解码，少约 150 MB；
   - MSAA 颜色和深度改 memoryless：少约 130 MB；
   - ID 栅格、高程、网格直接写进共享显存，读文件用内存映射：少约 190 MB。临时大数组释放后分配器不还给系统，所以别用临时数组。
+- 连续出帧（飞行、惯性、季风）用 GlobeMTKView 自己的 CADisplayLink，挂 common 模式；MTKView 一直 isPaused，静止时靠 setNeedsDisplay。11-08 修过：按下鼠标、滚轮会 stopMotion 把动画停掉，季风之后只靠悬停重画，看着一卡一卡。
+- 季风月份每帧变但不让 SwiftUI 观察，时间轴按 15 Hz 跟进（每帧刷新时 CPU 45%，现在约 24%）。调试：`SHANHAI_FPS=1` 打印出帧率与上屏间隔，`SHANHAI_PLAY=1` 让季风自动播。
 - 季风打开时持续出帧：全球视角 GPU 每帧约 6 ms（不开 4.5 ms），地形倾斜 50° 约 10 ms；内存约 400 MB。关掉后淡出完回到按需绘制。
 - 标签按需排进 16 MB 图集，满了清空重排；碰撞检测用网格。
 

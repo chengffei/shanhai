@@ -38,12 +38,18 @@ final class GlobeController {
             animating = true
         }
     }
-    var climateMonth: Double = Double(Calendar.current.component(.month, from: Date()) - 1)
+    /// 渲染用的月份每帧都变，不让 SwiftUI 观察；界面看 climateMonthShown（约 15 Hz 跟进）
+    @ObservationIgnored var climateMonth: Double = Double(Calendar.current.component(.month, from: Date()) - 1) {
+        didSet { if !climatePlaying { climateMonthShown = climateMonth } }
+    }
+    private(set) var climateMonthShown: Double = Double(Calendar.current.component(.month, from: Date()) - 1)
+    @ObservationIgnored private var lastShown = 0.0
     var climatePlaying = true
     /// 图层淡入淡出（0…1），每帧逼近开关状态
     @ObservationIgnored private(set) var climateFade: Double = 0
     static let secondsPerMonth = 2.0
-    var climateMonthIndex: Int { Int(climateMonth.rounded()) % 12 }
+    private static let debugHover = ProcessInfo.processInfo.environment["SHANHAI_FPS"] != nil
+    var climateMonthIndex: Int { Int(climateMonthShown.rounded()) % 12 }
 
     /// 搜索框获得焦点的请求（菜单 ⌘F 递增）
     var searchRequest = 0
@@ -61,14 +67,15 @@ final class GlobeController {
     init(geo: GeoData) { self.geo = geo }
 
     func requestRedraw() {
-        guard let view else { return }
+        // 连续出帧时由 MTKView 自己的定时器画；再 setNeedsDisplay 会在同一帧里多画一次并抢 drawable
+        guard let view = view as? GlobeMTKView, !view.continuous else { return }
         view.needsDisplay = true
     }
 
     private var animating = false {
         didSet {
-            guard animating != oldValue, let view else { return }
-            view.isPaused = !animating
+            guard animating != oldValue, let view = view as? GlobeMTKView else { return }
+            view.setContinuous(animating)
             lastStep = CACurrentMediaTime()
         }
     }
@@ -106,6 +113,7 @@ final class GlobeController {
         }
         if r != hoverRegion || c != hoverCountry {
             hoverRegion = r; hoverCountry = c
+            if Self.debugHover { print("HOVER", c); fflush(stdout) }
             requestRedraw()
         }
     }
@@ -185,7 +193,8 @@ final class GlobeController {
         animate(to: c, duration: 0.35)
     }
 
-    func stopMotion() { flight = nil; velocity = .zero; animating = false }
+    /// 按下鼠标、滚轮时停掉飞行和惯性；季风还在播就保持出帧
+    func stopMotion() { flight = nil; velocity = .zero; animating = climateOn || climateFade > 0 || currentInset != rightInset }
 
     func fling(_ v: SIMD2<Double>) {
         guard simd_length(v) > 2 else { return }
@@ -231,6 +240,7 @@ final class GlobeController {
         }
         if climateOn && climatePlaying {
             climateMonth = (climateMonth + dt / Self.secondsPerMonth).truncatingRemainder(dividingBy: 12)
+            if now - lastShown > 1.0 / 15 { lastShown = now; climateMonthShown = climateMonth }
         }
         // 面板留白平滑过渡
         let diff = rightInset - currentInset

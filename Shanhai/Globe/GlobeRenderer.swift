@@ -349,13 +349,32 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
     private let perf = ProcessInfo.processInfo.environment["SHANHAI_PERF"] != nil
     private var perfGPU: [Double] = [], perfCPU: [Double] = [], perfLast = CACurrentMediaTime()
 
+    private let fpsLog = ProcessInfo.processInfo.environment["SHANHAI_FPS"] != nil
+    private var waitSum = 0.0, cpuSum = 0.0
+    private var presPrev = 0.0, presGaps: [Double] = []
+    private var fpsFrames = 0, fpsMaxGap = 0.0, fpsLast = CACurrentMediaTime(), fpsPrev = CACurrentMediaTime()
+
     func draw(in view: MTKView) {
         let t0 = CACurrentMediaTime()
+        if fpsLog {
+            fpsFrames += 1; fpsMaxGap = max(fpsMaxGap, t0 - fpsPrev); fpsPrev = t0
+            if t0 - fpsLast > 2 {
+                let slow = presGaps.filter { $0 > 0.025 }.count
+                print(String(format: "FPS %.1f maxgap %.0f ms  presented %d  slow %d  presMax %.0f ms", Double(fpsFrames) / (t0 - fpsLast), fpsMaxGap * 1000,
+                             presGaps.count, slow, (presGaps.max() ?? 0) * 1000)); fflush(stdout)
+                print(String(format: "  per frame: total %.2f ms, drawable wait %.2f ms", cpuSum / Double(fpsFrames) * 1000, waitSum / Double(fpsFrames) * 1000)); fflush(stdout)
+                waitSum = 0; cpuSum = 0
+                presGaps.removeAll()
+                fpsFrames = 0; fpsMaxGap = 0; fpsLast = t0
+            }
+        }
         if perf, let c = controller {
-            view.isPaused = false
+            (view as? GlobeMTKView)?.setContinuous(true)
             var cam = c.camera; cam.lon += 0.25; c.camera = cam
         }
+        let tw = CACurrentMediaTime()
         guard let controller, let drawable = view.currentDrawable else { return }
+        if fpsLog { waitSum += CACurrentMediaTime() - tw }
         let pass = passDescriptor(for: drawable)
         controller.stepAnimation()
         let cam = controller.camera
@@ -490,6 +509,17 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
             enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: labelCount)
         }
         enc.endEncoding()
+        if fpsLog {
+            drawable.addPresentedHandler { [weak self] d in
+                let t = d.presentedTime
+                guard t > 0 else { return }
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    if self.presPrev > 0 { self.presGaps.append(t - self.presPrev) }
+                    self.presPrev = t
+                }
+            }
+        }
         cb.present(drawable)
         if perf {
             cb.addCompletedHandler { [weak self] b in
@@ -505,6 +535,7 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
             }
         }
         cb.commit()
+        if fpsLog { cpuSum += CACurrentMediaTime() - t0 }
     }
 
     /// 省界在远处淡出，免得整个地球糊成一团线

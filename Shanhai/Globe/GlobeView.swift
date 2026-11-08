@@ -34,6 +34,24 @@ struct GlobeView: NSViewRepresentable {
 final class GlobeMTKView: MTKView {
     weak var controller: GlobeController?
     var renderer: GlobeRenderer?
+
+    /// 连续出帧用自己的 display link：MTKView 自带的定时器和 setNeedsDisplay 混用时会停摆，
+    /// 而且挂在 common 模式下，拖动滑块、菜单打开时也不停
+    private(set) var continuous = false
+    private var link: CADisplayLink?
+    func setContinuous(_ on: Bool) {
+        guard on != continuous else { return }
+        continuous = on
+        if on {
+            let l = displayLink(target: self, selector: #selector(tick))
+            l.add(to: .main, forMode: .common)
+            link = l
+        } else {
+            link?.invalidate(); link = nil
+            needsDisplay = true
+        }
+    }
+    @objc private func tick() { draw() }
     private var downPoint: CGPoint?
     private var dragged = false
     private var lastDrag: (p: CGPoint, t: CFTimeInterval)?

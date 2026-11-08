@@ -164,8 +164,8 @@ struct MonsoonBar: View {
                     .monospacedDigit()
                     .frame(width: 54, alignment: .leading)
                     .contentTransition(.numericText())
-                Slider(value: Binding(get: { controller.climateMonth },
-                                      set: { controller.climateMonth = $0; controller.climatePlaying = false }),
+                Slider(value: Binding(get: { controller.climateMonthShown },
+                                      set: { controller.climatePlaying = false; controller.climateMonth = $0 }),
                        in: 0...11.99)
                     .help("拖动看不同月份")
             }
@@ -361,7 +361,15 @@ enum DebugHooks {
         }
         if let v = nums("SHANHAI_MONSOON"), let m = v.first {
             // SHANHAI_MONSOON=月份（1–12）：打开季风并停在该月
-            c.climateOn = true; c.climatePlaying = false; c.climateMonth = m - 1
+            c.climateOn = true; c.climatePlaying = env["SHANHAI_PLAY"] != nil; c.climateMonth = m - 1
+        }
+        if env["SHANHAI_HOVER_STORM"] != nil {
+            // 调试：模拟鼠标在地图上来回移动（120 Hz）
+            var t = 0.0
+            Timer.scheduledTimer(withTimeInterval: 1.0 / 120, repeats: true) { _ in
+                t += 1.0 / 120
+                c.hover(lat: 30 + 15 * sin(t * 0.7), lon: 100 + 30 * sin(t * 0.4))
+            }
         }
         if let m = env["SHANHAI_MODE"], let mode = MapMode(rawValue: m) { c.mode = mode }
         if let v = nums("SHANHAI_SELECT"), v.count == 2 { c.select(lat: v[0], lon: v[1]) }
