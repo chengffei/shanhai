@@ -4,6 +4,12 @@
 
 原生 macOS 地球仪，面向对地理零基础但有兴趣的人。2026-11-08 建。11-08 开源（GPL-3.0 加 CLA），公开仓库 github.com/chengffei/shanhai；只有明确说「发布版本」才发版，不占 WIP。
 
+## 发版
+
+- 11-08 发 v0.1.0：https://github.com/chengffei/shanhai/releases/tag/v0.1.0 。仅 Apple 芯片、macOS 26。
+- 流程：`scripts/make-release.sh` 出 dist/ 的 dmg、zip、sha256，另有固定名 Shanhai.zip、Shanhai.sha256 给 install.sh 用；用 Apple Development 证书加 hardened runtime 和沙盒重签（Team TWK29JGBQJ），未公证。`GH_TOKEN=$(gh auth token -u chengffei) gh release create …`，不切默认账号。资产约 400 MB，上传要几分钟。
+- 根目录 `install.sh`（curl | bash）核对 sha256、签名、Bundle ID、Team ID；已从 GitHub 实测装进临时目录，无隔离标记。
+
 ## 现状（0.1.0）
 
 - 自写 Metal 地球：三种风格。普通是按国家上色的政区图；地形是 Sentinel-2 卫星影像，加 3 倍夸张的真实起伏；复古是焦糖皮面地球仪（11-08 加）。
