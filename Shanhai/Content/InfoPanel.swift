@@ -147,7 +147,9 @@ struct FactsGrid: View {
         let s = km2 >= 10_000 ? String(format: "%.1f 万平方公里", Double(km2) / 1e4) : "\(km2) 平方公里"
         let jiangsu = 107_200.0
         let r = Double(km2) / jiangsu
-        if r >= 1.5 { return s + String(format: "，约 %.0f 个江苏", r) }
+        if r >= 10 { return s + String(format: "，约 %.0f 个江苏", r) }
+        if r >= 1.15 { return s + String(format: "，约 %.1f 个江苏", r) }
+        if r >= 0.85 { return s + "，和江苏差不多大" }
         if r >= 0.2 { return s + String(format: "，约江苏的 %.0f%%", r * 100) }
         return s
     }

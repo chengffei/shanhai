@@ -38,9 +38,10 @@ final class GlobeController {
 
     // MARK: 选中
 
+    /// 全球视角看不到省界，只选国家；放大到省级才选省
     func select(lat: Double, lon: Double) {
         let hit = geo.lookup(lat: lat, lon: lon)
-        selectedRegion = hit.region
+        selectedRegion = camera.showsProvinces ? hit.region : 0
         selectedCountry = hit.country
     }
 
@@ -62,7 +63,10 @@ final class GlobeController {
 
     func hover(lat: Double?, lon: Double?) {
         var r = 0, c = 0
-        if let lat, let lon { (r, c) = geo.lookup(lat: lat, lon: lon) }
+        if let lat, let lon {
+            (r, c) = geo.lookup(lat: lat, lon: lon)
+            if !camera.showsProvinces { r = 0 }
+        }
         if r != hoverRegion || c != hoverCountry {
             hoverRegion = r; hoverCountry = c
             requestRedraw()

@@ -338,8 +338,9 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
 
     /// 省界在远处淡出，免得整个地球糊成一团线
     private func regionLineAlpha(_ cam: Camera) -> Float {
-        let a = cam.altitude
-        return Float(max(0, min(1, (1.6 - a) / 1.0)))
+        // 在省级阈值上下 0.3 内淡入：阈值处正好一半
+        let a = cam.altitude, t = Camera.provinceAltitude
+        return Float(max(0, min(1, (t + 0.3 - a) / 0.6)))
     }
 
     // MARK: 标签布局
@@ -391,7 +392,7 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
             return true
         }
 
-        let showRegions = camera.altitude < 1.4
+        let showRegions = camera.showsProvinces
         if let r = geo.region(controller?.selectedRegion ?? 0) {
             place(key: r.id, text: r.name, style: .region, lon: r.label[0], lat: r.label[1])
         }

@@ -12,6 +12,10 @@ struct Camera: Equatable {
     static let minAltitude = 0.035
     static let maxAltitude = 6.0
     static let fovY = 35.0 * Double.pi / 180
+    /// 低于这个高度才进入「省级」：省界淡入过半、省名出现、点击选省。高于它只认国家
+    static let provinceAltitude = 1.2
+
+    var showsProvinces: Bool { altitude < Camera.provinceAltitude }
 
     /// 高度越低允许倾斜越大
     var maxTilt: Double {
