@@ -7,6 +7,8 @@ struct ContentView: View {
     @FocusState private var searchFocused: Bool
     /// 第一次选中过任何地方后不再显示引导
     @AppStorage("hasSelectedOnce") private var hasSelectedOnce = false
+    /// 全屏时隐藏系统工具栏（它在全屏下是一条不透明白条），控件改为浮在地球上
+    @State private var fullScreen = false
 
     private var hasSelection: Bool { controller.selectedCountry != 0 || controller.selectedRegion != 0 }
 
@@ -46,7 +48,7 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 14).padding(.vertical, 8)
                 .glassEffect(.regular, in: .capsule)
-                .padding(.top, 12)
+                .padding(.top, fullScreen ? 64 : 12)
                 .transition(.opacity)
             }
         }
@@ -68,31 +70,31 @@ struct ContentView: View {
                     .allowsHitTesting(false)
             }
         }
+        .overlay(alignment: .top) {
+            if fullScreen {
+                ZStack(alignment: .top) {
+                    HStack(spacing: 10) {
+                        StylePicker(controller: controller)
+                        MonsoonToggle(controller: controller)
+                    }
+                        .tint(Color(red: controller.mode.linkColor.0, green: controller.mode.linkColor.1, blue: controller.mode.linkColor.2))
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .glassEffect(.regular, in: .capsule)
+                    HStack { Spacer(); FloatingSearch(controller: controller) }
+                }
+                .padding(.horizontal, 16)
+                .modifier(BelowMenuBar())
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in fullScreen = true }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in fullScreen = false }
+        .toolbarVisibility(fullScreen ? .hidden : .visible, for: .windowToolbar)
         .onAppear { DebugHooks.apply(controller) }
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .toolbar {
-            ToolbarItemGroup(placement: .principal) {
-                Picker("视图", selection: $controller.mode) {
-                    Text("普通").tag(MapMode.political)
-                    Text("地形").tag(MapMode.terrain)
-                    Text("复古").tag(MapMode.vintage)
-                    Text("黑金").tag(MapMode.blackgold)
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 260)
-                .help("普通：按国家上色的政区图；地形：卫星影像加立体浮雕；复古：焦糖皮面地球仪；黑金：黑漆金箔地球仪")
-                Group {
-                if controller.climateOn {
-                    Button { controller.toggleClimate() } label: { Label("季风", systemImage: "wind") }
-                        .buttonStyle(.glassProminent)
-                        .tint(Color(red: controller.mode.linkColor.0, green: controller.mode.linkColor.1, blue: controller.mode.linkColor.2))
-                        .labelStyle(.titleAndIcon)
-                } else {
-                    Button { controller.toggleClimate() } label: { Label("季风", systemImage: "wind") }
-                        .labelStyle(.titleAndIcon)
-                }
-                }
-                .help("季风：一年里风向随季节反过来。夏天陆地比海洋热，海风带着水汽吹进大陆，下雨多；冬天反过来，风从大陆吹向海洋，天气干")
+            if !fullScreen {
+                ToolbarItem(placement: .principal) { StylePicker(controller: controller) }
+                ToolbarItem(placement: .principal) { MonsoonToggle(controller: controller) }
             }
         }
         .searchable(text: $query, placement: .toolbar, prompt: "搜索国家、省份或城市")
@@ -123,6 +125,112 @@ struct ContentView: View {
             controller.select(lat: lat, lon: lon)
         }
         query = ""
+    }
+}
+
+/// 风格切换：窗口模式放工具栏，全屏时浮在顶部
+struct StylePicker: View {
+    @Bindable var controller: GlobeController
+    var body: some View {
+        Picker("视图", selection: $controller.mode) {
+            Text("普通").tag(MapMode.political)
+            Text("地形").tag(MapMode.terrain)
+            Text("复古").tag(MapMode.vintage)
+            Text("黑金").tag(MapMode.blackgold)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .frame(width: 260)
+        .help("普通：按国家上色的政区图；地形：卫星影像加立体浮雕；复古：焦糖皮面地球仪；黑金：黑漆金箔地球仪")
+    }
+}
+
+/// 季风开关：打开时按当前风格的强调色填充
+struct MonsoonToggle: View {
+    let controller: GlobeController
+    var body: some View {
+        Group {
+        if controller.climateOn {
+            Button { controller.toggleClimate() } label: { Label("季风", systemImage: "wind") }
+                .buttonStyle(.glassProminent)
+                .tint(Color(red: controller.mode.linkColor.0, green: controller.mode.linkColor.1, blue: controller.mode.linkColor.2))
+                .labelStyle(.titleAndIcon)
+        } else {
+            Button { controller.toggleClimate() } label: { Label("季风", systemImage: "wind") }
+                .labelStyle(.titleAndIcon)
+        }
+        }
+        .help("季风：一年里风向随季节反过来。夏天陆地比海洋热，海风带着水汽吹进大陆，下雨多；冬天反过来，风从大陆吹向海洋，天气干")
+    }
+}
+
+/// 全屏时菜单栏若常驻会盖在内容上方（不计入安全区），浮动控件要让开它
+private struct BelowMenuBar: ViewModifier {
+    func body(content: Content) -> some View {
+        GeometryReader { g in
+            let bar = NSApp.mainMenu?.menuBarHeight ?? 24
+            content
+                .padding(.top, max(0, bar - g.safeAreaInsets.top) + 12)
+                .frame(maxWidth: .infinity, alignment: .top)
+        }
+    }
+}
+
+/// 全屏时用的搜索框：系统全屏工具栏是一条不透明白条，改成浮在地球上
+struct FloatingSearch: View {
+    let controller: GlobeController
+    @State private var query = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        let hits = SearchIndex.shared(controller.geo).find(query)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("搜索国家、省份或城市", text: $query)
+                    .textFieldStyle(.plain)
+                    .focused($focused)
+                    .onSubmit { if let h = hits.first { go(h) } }
+                    .onExitCommand { query = ""; focused = false }
+                if !query.isEmpty {
+                    Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                        .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 14).frame(height: 36)
+            .glassEffect(.regular, in: .capsule)
+            if focused && !hits.isEmpty {
+                VStack(spacing: 0) {
+                    ForEach(hits.prefix(8)) { hit in
+                        Button { go(hit) } label: {
+                            HStack {
+                                Text(hit.title)
+                                Spacer()
+                                Text(hit.subtitle).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                            .padding(.horizontal, 14).padding(.vertical, 7)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.vertical, 6)
+                .glassEffect(.regular, in: .rect(cornerRadius: 16))
+            }
+        }
+        .frame(width: 300)
+        .onChange(of: controller.searchRequest) { focused = true }
+    }
+
+    private func go(_ hit: SearchIndex.Hit) {
+        switch hit.kind {
+        case .country(let id): controller.select(country: id)
+        case .region(let id): controller.select(region: id)
+        case .city(let lat, let lon):
+            controller.fly(to: lat, lon: lon, extentDeg: 1.5)
+            controller.select(lat: lat, lon: lon)
+        }
+        query = ""; focused = false
     }
 }
 
@@ -167,6 +275,7 @@ struct MonsoonBar: View {
                 Slider(value: Binding(get: { controller.climateMonthShown },
                                       set: { controller.climatePlaying = false; controller.climateMonth = $0 }),
                        in: 0...11.99)
+                    .tint(Color(red: controller.mode.linkColor.0, green: controller.mode.linkColor.1, blue: controller.mode.linkColor.2))
                     .help("拖动看不同月份")
             }
             Text(Self.captions[m])

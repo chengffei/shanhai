@@ -15,6 +15,8 @@ struct ShanhaiApp: App {
             if let controller {
                 ContentView(controller: controller)
                     .frame(minWidth: 900, minHeight: 600)
+                    // 全屏时工具栏是一条不透明的白条压在地球上方；改成鼠标移到顶部才出现（同「地图」）
+                    .windowToolbarFullScreenVisibility(.onHover)
             } else {
                 Text("地理数据加载失败").padding(40)
             }
