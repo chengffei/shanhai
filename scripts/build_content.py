@@ -12,6 +12,9 @@ from pathlib import Path
 
 import numpy as np
 import requests
+from opencc import OpenCC
+
+T2S = OpenCC("t2s").convert   # Wikidata 的 zh 标签繁简混杂，统一成简体
 
 ROOT = Path(__file__).resolve().parent.parent
 GEO = ROOT / "Meridian/Resources/Geo"
@@ -171,13 +174,20 @@ def section_snippet(text, keys, limit):
 
 
 # ---------- 名人与事件（按坐标归区） ----------
-SPARQL = "https://query.wikidata.org/sparql"
+# 官方 WDQS 对「全库按语言版本数筛人」这类查询必超时（60 秒上限），改用 QLever 的 Wikidata 镜像
+SPARQL = "https://qlever.dev/api/wikidata"
+PREFIXES = """PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wikibase: <http://wikiba.se/ontology#>
+PREFIX schema: <http://schema.org/>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+"""
 
 
 def sparql(q):
     for i in range(4):
         try:
-            r = S.get(SPARQL, params={"query": q, "format": "json"}, timeout=300)
+            r = S.post(SPARQL, data={"query": PREFIXES + q}, headers={"Accept": "application/sparql-results+json"}, timeout=600)
             if r.status_code == 429:
                 time.sleep(30); continue
             r.raise_for_status()
@@ -209,7 +219,7 @@ def event_query(lo, hi):
 }}"""
 
 
-BANDS = [(25, 30), (30, 40), (40, 60), (60, 100), (100, 1000)]
+BANDS = [(20, 100000)]
 
 
 def fetch_people():
@@ -219,7 +229,7 @@ def fetch_people():
             for lo, hi in BANDS:
                 for b in sparql(people_query(prop, lo, hi)):
                     q = b["p"]["value"].rsplit("/", 1)[1]
-                    m = re.match(r"Point\(([-\d.eE]+) ([-\d.eE]+)\)", b["coord"]["value"])
+                    m = re.match(r"Point\(([-\d.eE]+) ([-\d.eE]+)\)", b["coord"]["value"], re.I)
                     if not m:
                         continue
                     r = rows.setdefault(q, {"q": q, "sl": int(b["sl"]["value"]), "name": b.get("pLabel", {}).get("value", ""),
@@ -234,10 +244,10 @@ def fetch_people():
 def fetch_events():
     def run():
         rows = {}
-        for lo, hi in [(15, 25), (25, 40), (40, 1000)]:
+        for lo, hi in [(15, 100000)]:
             for b in sparql(event_query(lo, hi)):
                 q = b["e"]["value"].rsplit("/", 1)[1]
-                m = re.match(r"Point\(([-\d.eE]+) ([-\d.eE]+)\)", b["coord"]["value"])
+                m = re.match(r"Point\(([-\d.eE]+) ([-\d.eE]+)\)", b["coord"]["value"], re.I)
                 if not m or q in rows:
                     continue
                 t = (b.get("t") or b.get("start") or {}).get("value", "")
@@ -262,14 +272,20 @@ def load_ids():
     return look
 
 
+def year_num(y):
+    m = re.match(r"^(-?\d{1,4})", y or "")
+    return int(m.group(1)) if m else None
+
+
 def year_text(y):
-    if not y:
-        return ""
-    try:
-        n = int(y)
-    except ValueError:
+    n = year_num(y)
+    if n is None:
         return ""
     return f"公元前{-n}年" if n < 0 else f"{n}年"
+
+
+def zh(s):
+    return T2S(s) if s else s
 
 
 def fmt_people(rows, place_key):
@@ -359,14 +375,15 @@ def main():
 
     def people_list(d, n):
         rows = sorted(d.values(), key=lambda r: -r["sl"])[:n]
-        return [{"q": r["q"], "name": r["name"] or r["q"], "desc": r["desc"], "born": year_text(r["born"]), "died": year_text(r["died"]),
+        return [{"q": r["q"], "name": zh(r["name"]), "desc": zh(r["desc"]), "born": year_text(r["born"]), "died": year_text(r["died"]),
                  "how": r["how"]} for r in rows if r["name"]]
 
     def event_list(rows, n):
+        # 只要有明确发生时间（P585 时间点或 P580 开始时间）的，排除地铁、陵墓这类「建成物」
+        rows = [r for r in rows if r["name"] and year_num(r["time"]) is not None]
         rows = sorted(rows, key=lambda r: -r["sl"])[:n]
-        rows = [r for r in rows if r["name"]]
-        rows.sort(key=lambda r: int(r["time"]) if r["time"].lstrip("-").isdigit() else 99999)
-        return [{"q": r["q"], "name": r["name"], "desc": r["desc"], "year": year_text(r["time"])} for r in rows]
+        rows.sort(key=lambda r: year_num(r["time"]))
+        return [{"q": r["q"], "name": zh(r["name"]), "desc": zh(r["desc"]), "year": year_text(r["time"])} for r in rows]
 
     overrides = {"Q57251": "台湾"}
     for c in countries:

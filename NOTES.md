@@ -31,10 +31,20 @@
 | build_content.py | Content/<国家a3>.json |
 
 - 国界口径：Natural Earth 中国视角（admin_0_countries_chn）。台湾、香港、澳门是中国的省级区；藏南并入西藏（`DISSOLVE`）；其他争议区按多数像素所在国归属。
+- 法、意、西、英的 admin-1 比省级细一级，按大区、自治区、构成国合并（`GROUP_BY`，Wikidata ID 已逐个核对）。
 - ID 栅格 8192×4096：uint16 省 + uint8 国。CPU 点选和 GPU 高亮共用一块共享内存。
 - 高程：AWS terrarium z4 瓦片，转成等经纬 4096×2048。
 - 卫星影像：EOX Sentinel-2 cloudless 2020，z6 瓦片。**CC BY-NC-SA 4.0，只能非商业使用**，面板底部要署名。
-- 内容：名人取 Wikidata 上语言版本数 ≥25 的人，按出生地或工作地坐标落进 ID 栅格；事件取有坐标的 occurrence。
+- 内容：名人走 QLever 的 Wikidata 镜像（官方 WDQS 这类全库查询必超时），取语言版本数 ≥20 的人，按出生地或工作地坐标落进 ID 栅格；事件取有坐标的 occurrence。
+
+## 性能（11-08，M1 Pro，Release，2560×1640）
+
+- 自转时 GPU 每帧 4 到 5 ms，60 Hz 外接屏跑满。
+- 按需绘制：静止时不出帧，空闲 CPU 0%。
+- 内存 446 MB，两张 16K 底图常驻。做过两处压缩：
+  - 底图改 BC1 KTX：省掉 JPG 解码，少约 150 MB；
+  - MSAA 颜色和深度改 memoryless：少约 130 MB。
+- 标签按需排进 16 MB 图集，满了清空重排；碰撞检测用网格。
 
 ## 命令
 

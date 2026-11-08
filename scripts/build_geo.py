@@ -163,11 +163,23 @@ def ring_lines(geoms, tol):
     """返回 [(owner_id, [(lon,lat),...]), ...]，简化后的外环与内环。"""
     out = []
     for gid, g in geoms.items():
-        for p in polys(g.simplify(tol, preserve_topology=True)):
+        # 简化后再把长直边加密到 0.5°，免得两点间的弦线钻进球面
+        for p in polys(g.simplify(tol, preserve_topology=True).segmentize(0.5)):
             for ring in [p.exterior, *p.interiors]:
-                cs = list(ring.coords)
-                if len(cs) >= 3:
-                    out.append((gid, cs))
+                # 沿 ±180° 经线或南极点的边是切割产生的假边，不画
+                piece = []
+                for a, b in zip(ring.coords[:-1], ring.coords[1:]):
+                    fake = (abs(a[0]) > 179.99 and abs(b[0]) > 179.99) or (a[1] < -89.9 and b[1] < -89.9)
+                    if fake:
+                        if len(piece) >= 2:
+                            out.append((gid, piece))
+                        piece = []
+                        continue
+                    if not piece:
+                        piece = [a]
+                    piece.append(b)
+                if len(piece) >= 2:
+                    out.append((gid, piece))
     return out
 
 
