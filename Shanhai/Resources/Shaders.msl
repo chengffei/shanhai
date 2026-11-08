@@ -95,39 +95,70 @@ fragment float4 globe_fragment(GlobeOut in [[stage_in]],
         return float4(color * shade + float3(1.0, 0.86, 0.66) * spec, 1.0);
     }
     if (style == 1) {
-        // 地形晕渲：光源固定在西北 45° 高（制图惯例），细、粗两个尺度的坡度叠加；
-        // 晕渲用的放大倍数是顶点位移的 4 倍，10 km 一格的高程在大尺度下才看得出坡
+        // 地形浮雕：晕渲 + 山体投影 + 环境光遮蔽，光源固定在西北、仰角 35°（制图惯例）
         constexpr sampler hs(filter::linear, address::repeat);
         float2 texel = 1.0 / float2(heightTex.get_width(), heightTex.get_height());
         float lat = PI * 0.5 - in.uv.y * PI;
+        float coslat = max(cos(lat), 0.05);
         float lonr = in.uv.x * 2.0 * PI - PI;
         float3 east = float3(cos(lonr), 0.0, -sin(lonr));
         float3 north = cross(n, east);
-        float k = max(u.params.x * 4.0, 30.0 / 6371000.0);   // 近景位移只放大 3 倍，晕渲至少按 30 倍算
         auto H = [&](float2 o) { return max(heightTex.sample(hs, in.uv + o).r, 0.0); };
+        float h0 = H(float2(0));
+        // 明暗用的放大倍数（半径/米）：顶点位移的 1.5 倍，最低 30 倍
+        float k = max(u.params.x * 1.5, 30.0 / 6371000.0);
+
+        // 1 晕渲：细（1 格）粗（6 格）两尺度坡度
         float3 nt = n;
-        // 细尺度（1 格）看山脊，粗尺度（6 格）看高原边缘、盆地外沿
         for (int lvl = 0; lvl < 2; lvl++) {
             float sstep = lvl == 0 ? 1.0 : 6.0;
             float w = lvl == 0 ? 0.45 : 0.55;
             float2 ox = float2(texel.x * sstep, 0), oy = float2(0, texel.y * sstep);
             float he = H(ox) - H(-ox);
             float hn = H(-oy) - H(oy);
-            float dx = 2.0 * ox.x * 2.0 * PI * max(cos(lat), 0.05);
+            float dx = 2.0 * ox.x * 2.0 * PI * coslat;
             float dy = 2.0 * oy.y * PI;
             nt += w * (-east * (he * k / dx) - north * (hn * k / dy));
         }
         nt = normalize(nt);
-        float3 Ls = normalize(n * 0.72 + north * 0.49 - east * 0.49);   // 西北上方
-        float flat = dot(n, Ls);
-        float hill = clamp(dot(nt, Ls) / flat, 0.0, 2.0);
-        float relief = clamp(0.30 + 0.70 * hill, 0.42, 1.45);
-        // 海拔亮度：高原略亮、平原盆地略暗，帮助看出地势阶梯
-        float h = H(float2(0));
-        float alt = mix(0.93, 1.08, smoothstep(0.0, 4500.0, h));
-        float land = step(1.0, h);   // 海面不做晕渲
+        const float elev = 35.0 * PI / 180.0;
+        float3 Ls = normalize(n * sin(elev) + (north - east) * (cos(elev) * 0.70710678));
+        float hill = clamp(dot(nt, Ls) / dot(n, Ls), 0.0, 2.2);
+        float relief = clamp(0.30 + 0.70 * hill, 0.48, 1.40);
+
+        // 2 投影：沿光源水平方向往西北走，射线按仰角升高，被更高的地面挡住就在阴影里
+        float shadow = 1.0;
+        if (h0 < 8500.0) {
+            float tanE = tan(elev);
+            // 影子长度上限随视野缩短：近看时不让一道山的影子盖住半个盆地
+            float dMax = min((8800.0 - h0) * k / tanE, min(0.035, u.viewport.w * 0.06));
+            float2 dirUV = float2(-0.70710678 / (2.0 * PI * coslat), -0.70710678 / PI);
+            for (int i = 1; i <= 16; i++) {
+                float t = float(i) / 16.0;
+                float D = dMax * t * t;
+                float rayH = h0 + D * tanE / k;
+                float diff = H(dirUV * D) - rayH;
+                shadow = min(shadow, 1.0 - smoothstep(0.0, 350.0, diff));
+            }
+        }
+
+        // 3 环境光遮蔽：比周围两圈平均海拔低的地方（谷底、盆地）压暗
+        float ring1 = 0.0, ring2 = 0.0;
+        for (int j = 0; j < 8; j++) {
+            float a = float(j) * PI * 0.25;
+            float2 dir = float2(cos(a) / coslat * texel.y * 2.0, sin(a) * texel.y);
+            ring1 += H(dir * 4.0);
+            ring2 += H(dir * 14.0);
+        }
+        float around = (ring1 + ring2) / 16.0;
+        float ao = clamp(1.0 - (around - h0) / 2600.0, 0.6, 1.08);
+
+        // 4 海拔亮度：高原略亮、平原盆地略暗
+        float alt = mix(0.93, 1.08, smoothstep(0.0, 4500.0, h0));
+        float land = step(1.0, h0);
         float3 lit = color * (0.62 + 0.45 * d);
-        return float4(mix(lit, lit * relief * alt, land), 1.0);
+        float3 emboss = lit * relief * alt * ao * mix(0.62, 1.0, shadow);
+        return float4(mix(lit, emboss, land), 1.0);
     }
     float shade = 0.86 + 0.16 * d;
     return float4(color * shade, 1.0);

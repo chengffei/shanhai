@@ -27,7 +27,8 @@ OUT = ROOT / "Shanhai/Resources/Geo"
 OUT.mkdir(parents=True, exist_ok=True)
 
 W, H = 8192, 4096          # ID 图与底图
-HW, HH = 4096, 2048        # 高程图
+HW, HH = 8192, 4096        # 高程图（terrarium z5，约 5 km 一格）
+HZ = 5
 MERGE = {"TWN": ("台湾省", "Taiwan", "Q57251"), "HKG": ("香港特别行政区", "Hong Kong", "Q8646"),
          "MAC": ("澳门特别行政区", "Macau", "Q14773")}
 PALETTE = ["#F1E4C3", "#DCEACB", "#F4D8CC", "#E6DCF0", "#F5EAB2", "#D3E8DE", "#EFD6E2"]
@@ -322,25 +323,29 @@ def build_cities(countries):
 
 
 def build_height():
-    """terrarium z4（Web 墨卡托 4096²）→ 等经纬 4096×2048 int16。"""
-    tiles = RAW / "terrarium4"
-    merc = np.zeros((4096, 4096), dtype=np.float32)
-    for x in range(16):
-        for y in range(16):
+    """terrarium z5（Web 墨卡托 8192²）→ 等经纬 8192×4096 int16。按行处理，免得一次吃掉几 GB 内存"""
+    tiles = RAW / f"terrarium{HZ}"
+    n = 2 ** HZ
+    size = n * 256
+    merc = np.zeros((size, size), dtype=np.float32)
+    for x in range(n):
+        for y in range(n):
             a = np.array(Image.open(tiles / f"{x}_{y}.png").convert("RGB"), dtype=np.float32)
             merc[y * 256:(y + 1) * 256, x * 256:(x + 1) * 256] = a[..., 0] * 256 + a[..., 1] + a[..., 2] / 256 - 32768
     lat = 90 - (np.arange(HH) + 0.5) / HH * 180
     latc = np.clip(lat, -85.05, 85.05)
-    my = (1 - np.log(np.tan(np.pi / 4 + np.radians(latc) / 2)) / np.pi) / 2 * 4096
-    mx = (np.arange(HW) + 0.5) / HW * 4096
-    yi = np.clip(my.astype(int), 0, 4095)
-    xi = np.clip(mx.astype(int), 0, 4095)
-    eq = merc[yi[:, None], xi[None, :]]
-    eq[lat > 85.05] = merc[0].mean()
+    my = (1 - np.log(np.tan(np.pi / 4 + np.radians(latc) / 2)) / np.pi) / 2 * size - 0.5
+    y0 = np.clip(np.floor(my).astype(int), 0, size - 1)
+    y1 = np.clip(y0 + 1, 0, size - 1)
+    f = (my - y0).astype(np.float32)
+    xi = np.clip(((np.arange(HW) + 0.5) / HW * size).astype(int), 0, size - 1)
+    eq = np.empty((HH, HW), dtype=np.float32)
+    for i in range(HH):
+        eq[i] = merc[y0[i], xi] * (1 - f[i]) + merc[y1[i], xi] * f[i]
+    eq[lat > 85.05] = 0
     eq[lat < -85.05] = 2800  # 南极高原
     co = zlib.compressobj(9, zlib.DEFLATED, -15)
     (OUT / "height.bin").write_bytes(struct.pack("<II", HW, HH) + co.compress(np.clip(eq, -11000, 9000).astype("<i2").tobytes()) + co.flush())
-
 
 if __name__ == "__main__":
     main()

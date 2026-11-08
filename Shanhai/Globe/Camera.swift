@@ -23,11 +23,11 @@ struct Camera: Equatable {
         return max(0, min(1, t)) * (60 * .pi / 180)
     }
 
-    /// 地形起伏放大倍数：近处 3 倍接近真实，远处放大到 25 倍，否则山脉在大尺度下看不出来
+    /// 地形起伏放大倍数：近处 6 倍，远处到 50 倍，像实体浮雕地球仪那样在大尺度下也看得出山脉
     var reliefExaggeration: Double {
         let t = max(0, min(1, (altitude - 0.05) / (1.0 - 0.05)))
         let s = t * t * (3 - 2 * t)
-        return 3 + 22 * s
+        return 6 + 44 * s
     }
 
     mutating func clamp() {
