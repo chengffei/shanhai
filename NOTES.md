@@ -2,12 +2,12 @@
 
 11-08 由 Meridian 改名为山海（取自《山海经》），目录 personal/shanhai，Bundle ID io.github.chengffei.shanhai，装为 /Applications/山海.app。
 
-原生 macOS 地球仪，做给妻子（对地理零基础但有兴趣）。2026-11-08 建。自用，不开源，不发版，不占 WIP。
+原生 macOS 地球仪，面向对地理零基础但有兴趣的人。2026-11-08 建。11-08 开源（GPL-3.0 加 CLA），公开仓库 github.com/chengffei/shanhai；只有明确说「发布版本」才发版，不占 WIP。
 
 ## 现状（0.1.0）
 
 - 自写 Metal 地球：三种风格。普通是按国家上色的政区图；地形是 Sentinel-2 卫星影像，加 3 倍夸张的真实起伏；复古是焦糖皮面地球仪（11-08 加）。
-- 复古风格（11-08 去掉了黄铜环，Felix 嫌挡视线）包括：焦糖海、深棕陆地、海岸外水纹线、经纬网，暖灰桌面背景；奶油色字配深棕描边；暖金高亮。底图第一次切到复古时才加载，约 90 MB。
+- 复古风格（11-08 去掉了黄铜环，挡视线）包括：焦糖海、深棕陆地、海岸外水纹线、经纬网，暖灰桌面背景；奶油色字配深棕描边；暖金高亮。底图第一次切到复古时才加载，约 90 MB。
 - 黑金风格（11-08）：钢琴漆黑海、金箔陆地（低频起伏加横向拉丝）；金面用金属高光加边缘反射，海面漆面高光，高光按高度减弱（近看不打爆）；深暖黑背景、球后淡暖光；底图首次切换才加载。
 - 季风图层（11-08）：工具栏「季风」或 ⌘J，任何风格都能叠。逐月气候平均，每 2 秒走一个月，可拖动。画四样：
   - 地面风：6000 个粒子，计算着色器推进，每个留 40 帧轨迹；只在视野内的球冠里生成，缩放时屏幕密度不变；陆地和海上换色；
@@ -37,7 +37,7 @@
 
 ## 数据管线
 
-全部在 `scripts/`，Python 环境在 `scripts/.venv`（numpy、pillow、pyshp、shapely、requests）。原始数据在 `data/raw/`，中间产物在 `data/work/`，都不入 git。
+全部在 `scripts/`，Python 环境在 `scripts/.venv`（numpy、pillow、pyshp、shapely、requests）。原始数据由 `scripts/fetch_raw.sh` 下载到 `data/raw/`，中间产物在 `data/work/`，都不入 git。
 
 | 脚本 | 产物 |
 |---|---|
@@ -71,7 +71,7 @@
 - `xcodegen generate` 后构建；`scripts/install.sh` 装 Release 到 /Applications。
 - 着色器在 `Shanhai/Resources/Shaders.msl`，运行时编译。本机 Xcode 没装 Metal 工具链，不依赖它。
 - 截图调试：`open -n --env SHANHAI_PRINT_WINDOW=1 --env SHANHAI_CAMERA=纬,经,高度,倾斜,朝向 ...`，另有 `SHANHAI_MODE=terrain`、`SHANHAI_SELECT=纬,经`、`SHANHAI_HOVER=纬,经`、`SHANHAI_NOLABELS=1`、`SHANHAI_PRESS_3D=1`、`SHANHAI_MONSOON=7`（打开季风停在 7 月）。**直接执行二进制不出窗口**（沙盒应用），要用 `open`。
-- 图标：`design/icon_shanhai.py` 程序绘制，`scripts/generate-icon.sh` 一步生成 icns。构图是海水江崖：团扇圆框里，青绿主峰从水纹中升起、冲出圆框，配朱日；山顶石青晕染到山脚石绿，不放文字。Felix 否掉过两轮：渲染地球四版太普通，罗盘、青绿、舆图三版是剪贴画。
+- 图标：`design/icon_shanhai.py` 程序绘制，`scripts/generate-icon.sh` 一步生成 icns。构图是海水江崖：团扇圆框里，青绿主峰从水纹中升起、冲出圆框，配朱日；山顶石青晕染到山脚石绿，不放文字。否掉过两轮：渲染地球四版太普通，罗盘、青绿、舆图三版是剪贴画。
 - 离屏渲染地球：`SHANHAI_ICON=容器内路径.png`（沙盒只能写 `~/Library/Containers/io.github.chengffei.shanhai/Data/tmp`）。
 
 ## 待做

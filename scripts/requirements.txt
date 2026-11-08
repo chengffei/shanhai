@@ -1,0 +1,7 @@
+numpy
+pillow
+pyshp
+shapely
+requests
+netCDF4
+opencc-python-reimplemented
