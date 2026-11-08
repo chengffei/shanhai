@@ -1,0 +1,9 @@
+.build/
+data/raw/
+data/work/
+data/*.log
+scripts/.venv/
+scripts/__pycache__/
+*.xcodeproj/
+Meridian/Resources/Geo/*.ktx
+.DS_Store

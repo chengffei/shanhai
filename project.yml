@@ -1,0 +1,47 @@
+name: Meridian
+options:
+  bundleIdPrefix: io.github.chengffei
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    SWIFT_STRICT_CONCURRENCY: minimal
+targets:
+  Meridian:
+    type: application
+    platform: macOS
+    sources:
+      - path: Meridian
+        excludes: [Resources]
+      - path: Meridian/Resources/Geo
+        type: folder
+        buildPhase: resources
+      - path: Meridian/Resources/Content
+        type: folder
+        buildPhase: resources
+      - path: Meridian/Resources/Shaders.msl
+        buildPhase: resources
+      - path: Meridian/Resources/AppIcon.icns
+        buildPhase: resources
+    entitlements:
+      path: Meridian/Meridian.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+    info:
+      path: Meridian/Info.plist
+      properties:
+        CFBundleName: Meridian
+        CFBundleDisplayName: Meridian
+        CFBundleIconFile: AppIcon
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        CFBundleDevelopmentRegion: zh-Hans
+        LSMinimumSystemVersion: "26.0"
+        LSApplicationCategoryType: public.app-category.education
+        NSHumanReadableCopyright: "© 2026 Felix"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.chengffei.meridian
+        CODE_SIGN_IDENTITY: "-"

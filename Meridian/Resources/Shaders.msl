@@ -1,0 +1,180 @@
+#include <metal_stdlib>
+using namespace metal;
+
+// 与 Swift 端 Uniforms 一致：只用 16 字节对齐的字段
+struct Uniforms {
+    float4x4 viewProj;
+    float4x4 invViewProj;
+    float4 eye;        // xyz
+    float4 light;      // xyz
+    float4 params;     // x 地形夸张（半径/米） y 省界透明度 z 国界透明度 w 地形模式
+    uint4  sel;        // 选中省、选中国、悬停省、悬停国
+    float4 viewport;   // 宽、高（像素）、缩放、海拔（半径）
+};
+
+constant float PI = 3.14159265358979;
+constant float3 ACCENT = float3(0.0, 0.48, 1.0);
+
+static float3 spherePoint(float latr, float lonr) {
+    float c = cos(latr);
+    return float3(c * sin(lonr), sin(latr), c * cos(lonr));
+}
+
+static float heightAt(texture2d<float> heightTex, float2 uv) {
+    constexpr sampler s(filter::linear, address::repeat);
+    return max(heightTex.sample(s, uv, level(0)).r, 0.0);
+}
+
+// ---------- 地球 ----------
+struct GlobeOut {
+    float4 position [[position]];
+    float2 uv;
+    float3 normal;
+};
+
+vertex GlobeOut globe_vertex(uint vid [[vertex_id]],
+                             const device float2 *uvs [[buffer(0)]],
+                             constant Uniforms &u [[buffer(1)]],
+                             texture2d<float> heightTex [[texture(0)]]) {
+    float2 uv = uvs[vid];
+    float lonr = uv.x * 2.0 * PI - PI;
+    float latr = PI * 0.5 - uv.y * PI;
+    float3 n = spherePoint(latr, lonr);
+    float r = 1.0 + heightAt(heightTex, uv) * u.params.x;
+    GlobeOut o;
+    o.position = u.viewProj * float4(n * r, 1.0);
+    o.uv = uv;
+    o.normal = n;
+    return o;
+}
+
+fragment float4 globe_fragment(GlobeOut in [[stage_in]],
+                               constant Uniforms &u [[buffer(1)]],
+                               texture2d<float> base [[texture(0)]],
+                               texture2d<uint> regionTex [[texture(1)]],
+                               texture2d<uint> countryTex [[texture(2)]]) {
+    constexpr sampler s(filter::linear, mip_filter::linear, address::repeat, max_anisotropy(8));
+    // 用 uv 的导数取 mip，经线接缝处 uv 跳变由网格重复列避免
+    float3 color = base.sample(s, in.uv).rgb;
+
+    uint w = regionTex.get_width(), h = regionTex.get_height();
+    uint2 p = uint2(fract(in.uv.x) * w, clamp(in.uv.y, 0.0, 0.99999) * h);
+    p.x = min(p.x, w - 1);
+    uint rid = regionTex.read(p).r;
+    uint cid = countryTex.read(p).r;
+
+    float tint = 0.0;
+    if (rid != 0 && rid == u.sel.x) tint = 0.38;
+    else if (u.sel.x == 0 && cid != 0 && cid == u.sel.y) tint = 0.30;
+    else if (u.sel.x != 0 && cid != 0 && cid == u.sel.y) tint = 0.08;
+    if (tint == 0.0) {
+        if (rid != 0 && rid == u.sel.z) tint = 0.16;
+        else if (u.sel.z == 0 && cid != 0 && cid == u.sel.w) tint = 0.12;
+    }
+    color = mix(color, ACCENT, tint);
+
+    float3 n = normalize(in.normal);
+    float d = max(dot(n, normalize(u.light.xyz)), 0.0);
+    float shade = u.params.w > 0.5 ? (0.62 + 0.45 * d) : (0.86 + 0.16 * d);
+    return float4(color * shade, 1.0);
+}
+
+// ---------- 边界线 ----------
+struct LineOut {
+    float4 position [[position]];
+};
+
+constant float2 OFFSETS[9] = { float2(0,0), float2(1,0), float2(0,1), float2(1,1), float2(-1,0), float2(0,-1), float2(-1,-1), float2(1,-1), float2(-1,1) };
+
+vertex LineOut line_vertex(uint vid [[vertex_id]],
+                           uint iid [[instance_id]],
+                           const device float2 *lonlat [[buffer(0)]],
+                           constant Uniforms &u [[buffer(1)]],
+                           texture2d<float> heightTex [[texture(0)]]) {
+    float2 ll = lonlat[vid];
+    float lonr = ll.x * PI / 180.0, latr = ll.y * PI / 180.0;
+    float2 uv = float2((ll.x + 180.0) / 360.0, (90.0 - ll.y) / 180.0);
+    float3 n = spherePoint(latr, lonr);
+    float3 p = n * (1.0 + heightAt(heightTex, uv) * u.params.x);
+    p += n * distance(p, u.eye.xyz) * 0.0015;     // 抬离地表，避免与地面互相遮挡
+    LineOut o;
+    o.position = u.viewProj * float4(p, 1.0);
+    o.position.xy += OFFSETS[iid] * 2.0 / u.viewport.xy * o.position.w;
+    return o;
+}
+
+fragment float4 line_fragment(LineOut in [[stage_in]], constant float4 &color [[buffer(0)]]) {
+    return float4(color.rgb * color.a, color.a);
+}
+
+// ---------- 大气与背景 ----------
+struct SkyOut {
+    float4 position [[position]];
+    float2 ndc;
+};
+
+vertex SkyOut sky_vertex(uint vid [[vertex_id]]) {
+    float2 p = float2((vid << 1) & 2, vid & 2) * 2.0 - 1.0;
+    SkyOut o;
+    o.position = float4(p, 1.0, 1.0);
+    o.ndc = p;
+    return o;
+}
+
+fragment float4 sky_fragment(SkyOut in [[stage_in]], constant Uniforms &u [[buffer(1)]]) {
+    float4 a = u.invViewProj * float4(in.ndc, 0.0, 1.0);
+    float4 b = u.invViewProj * float4(in.ndc, 1.0, 1.0);
+    float3 ro = u.eye.xyz;
+    float3 rd = normalize(b.xyz / b.w - a.xyz / a.w);
+    float t = max(-dot(ro, rd), 0.0);
+    float closest = length(ro + rd * t);
+    float3 space = float3(0.035, 0.045, 0.075);
+    float glow = 1.0 - smoothstep(1.0, 1.0 + 0.045, closest);
+    glow = pow(glow, 1.8);
+    float3 c = space + float3(0.45, 0.68, 1.0) * glow * 0.55;
+    return float4(c, 1.0);
+}
+
+// ---------- 地名标签 ----------
+struct LabelInstance {
+    float2 center;    // 像素（左上原点）
+    float2 size;      // 像素
+    float4 uv;        // x0 y0 x1 y1
+    float4 style;     // x 0 = 省 1 = 国；y 不透明度
+};
+
+struct LabelOut {
+    float4 position [[position]];
+    float2 uv;
+    float kind;
+    float alpha;
+};
+
+vertex LabelOut label_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
+                             const device LabelInstance *ls [[buffer(0)]],
+                             constant Uniforms &u [[buffer(1)]]) {
+    LabelInstance l = ls[iid];
+    float2 corner = float2(vid & 1, vid >> 1);            // 三角带 4 个顶点
+    float2 px = l.center + (corner - 0.5) * l.size;
+    LabelOut o;
+    o.position = float4(px.x / u.viewport.x * 2.0 - 1.0, 1.0 - px.y / u.viewport.y * 2.0, 0.0, 1.0);
+    o.uv = mix(l.uv.xy, l.uv.zw, corner);
+    o.kind = l.style.x;
+    o.alpha = l.style.y;
+    return o;
+}
+
+fragment float4 label_fragment(LabelOut in [[stage_in]], constant Uniforms &u [[buffer(1)]],
+                               texture2d<float> atlas [[texture(0)]]) {
+    constexpr sampler s(filter::linear);
+    float2 fh = atlas.sample(s, in.uv).rg;
+    bool terrain = u.params.w > 0.5;
+    // kind：0 省 1 国 2 城市
+    float3 ink = terrain ? float3(1.0) : (in.kind > 1.5 ? float3(0.16, 0.16, 0.18) : (in.kind > 0.5 ? float3(0.11, 0.11, 0.12) : float3(0.40, 0.40, 0.43)));
+    float3 halo = terrain ? float3(0.0) : float3(1.0);
+    float haloA = terrain ? 0.55 : 0.85;
+    float a = max(fh.r, fh.g * haloA);
+    float3 c = mix(halo, ink, fh.r / max(a, 1e-4) * (fh.r > 0.0 ? 1.0 : 0.0));
+    a *= in.alpha;
+    return float4(c * a, a);
+}
