@@ -86,9 +86,7 @@ struct MapControls: View {
             Button { controller.home() } label: { Image(systemName: "globe.asia.australia") }
                 .help("回到整个地球")
             Button { controller.toggle3D() } label: { Text(controller.camera.tilt > 0.05 ? "2D" : "3D").font(.system(size: 13, weight: .semibold)) }
-                .help(controller.camera.maxTilt < 0.2 ? "放大一些才能倾斜视角" : "倾斜视角看山脉起伏，地形视图下最明显（按住 Option 拖动也可以）")
-                .disabled(controller.camera.maxTilt < 0.2)
-                .opacity(controller.camera.maxTilt < 0.2 ? 0.4 : 1)
+                .help("倾斜视角看山脉起伏，地形视图下最明显；离得远时会先飞近（按住 Option 拖动也可以）")
             if abs(controller.camera.heading) > 0.01 {
                 Button { controller.northUp() } label: {
                     Image(systemName: "location.north.line.fill").rotationEffect(.radians(-controller.camera.heading))
@@ -186,7 +184,7 @@ final class SearchIndex {
 }
 
 /// 调试用：SHANHAI_CAMERA="纬,经,高度,倾斜度数,朝向度数"  SHANHAI_MODE=terrain  SHANHAI_SELECT="纬,经"
-/// SHANHAI_HOVER="纬,经"；启动 1 秒后在标准输出打印 WINDOW <窗口号>
+/// SHANHAI_HOVER="纬,经"；SHANHAI_PRESS_3D=1 启动 1 秒后按一下 3D；启动 1 秒后在标准输出打印 WINDOW <窗口号>
 enum DebugHooks {
     static func apply(_ c: GlobeController) {
         let env = ProcessInfo.processInfo.environment
@@ -201,6 +199,7 @@ enum DebugHooks {
         if let m = env["SHANHAI_MODE"], let mode = MapMode(rawValue: m) { c.mode = mode }
         if let v = nums("SHANHAI_SELECT"), v.count == 2 { c.select(lat: v[0], lon: v[1]) }
         if let v = nums("SHANHAI_HOVER"), v.count == 2 { c.hover(lat: v[0], lon: v[1]) }
+        if env["SHANHAI_PRESS_3D"] != nil { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { c.toggle3D() } }
         // SHANHAI_ICON=输出.png：离屏渲染一张 2048² 地球后退出（SHANHAI_SKY=1 带太空背景）
         if let out = env["SHANHAI_ICON"] {
             func attempt() {

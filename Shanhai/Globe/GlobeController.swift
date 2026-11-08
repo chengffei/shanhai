@@ -116,10 +116,17 @@ final class GlobeController {
         animate(to: c, duration: 1.0)
     }
 
+    /// 3D：已倾斜就回正；否则先飞近到能倾斜的高度（全球视角下也能直接按），再倾斜 50°
     func toggle3D() {
         var c = camera
-        c.tilt = c.tilt > 0.05 ? 0 : c.maxTilt
-        animate(to: c)
+        if c.tilt > 0.05 {
+            c.tilt = 0
+            animate(to: c)
+            return
+        }
+        c.altitude = min(c.altitude, 0.6)
+        c.tilt = min(c.maxTilt, 50 * .pi / 180)
+        animate(to: c, duration: c.altitude < camera.altitude ? 1.2 : 0.6)
     }
 
     func northUp() {

@@ -55,7 +55,7 @@
 
 - `xcodegen generate` 后构建；`scripts/install.sh` 装 Release 到 /Applications。
 - 着色器在 `Shanhai/Resources/Shaders.msl`，运行时编译。本机 Xcode 没装 Metal 工具链，不依赖它。
-- 截图调试：`open -n --env SHANHAI_PRINT_WINDOW=1 --env SHANHAI_CAMERA=纬,经,高度,倾斜,朝向 ...`，另有 `SHANHAI_MODE=terrain`、`SHANHAI_SELECT=纬,经`、`SHANHAI_HOVER=纬,经`、`SHANHAI_NOLABELS=1`。**直接执行二进制不出窗口**（沙盒应用），要用 `open`。
+- 截图调试：`open -n --env SHANHAI_PRINT_WINDOW=1 --env SHANHAI_CAMERA=纬,经,高度,倾斜,朝向 ...`，另有 `SHANHAI_MODE=terrain`、`SHANHAI_SELECT=纬,经`、`SHANHAI_HOVER=纬,经`、`SHANHAI_NOLABELS=1`、`SHANHAI_PRESS_3D=1`。**直接执行二进制不出窗口**（沙盒应用），要用 `open`。
 - 图标：`design/icon_shanhai.py` 程序绘制，`scripts/generate-icon.sh` 一步生成 icns。构图是海水江崖：团扇圆框里，青绿主峰从水纹中升起、冲出圆框，配朱日；山顶石青晕染到山脚石绿，不放文字。Felix 否掉过两轮：渲染地球四版太普通，罗盘、青绿、舆图三版是剪贴画。
 - 离屏渲染地球：`SHANHAI_ICON=容器内路径.png`（沙盒只能写 `~/Library/Containers/io.github.chengffei.shanhai/Data/tmp`）。
 
