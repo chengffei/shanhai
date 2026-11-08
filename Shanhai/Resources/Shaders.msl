@@ -79,13 +79,35 @@ fragment float4 globe_fragment(GlobeOut in [[stage_in]],
         else if (u.sel.z == 0 && cid != 0 && cid == u.sel.w) tint = 0.12;
     }
     // 复古风格用暖金高亮，蓝色压在棕色上会发闷
-    float3 accent = styleOf(u) == 2 ? float3(1.0, 0.84, 0.55) : ACCENT;
-    color = mix(color, accent, tint * (styleOf(u) == 2 ? 1.3 : 1.0));
+    int st = styleOf(u);
+    float3 accent = st == 2 ? float3(1.0, 0.84, 0.55) : (st == 3 ? float3(1.0, 0.95, 0.80) : ACCENT);
+    color = mix(color, accent, tint * (st >= 2 ? 1.3 : 1.0));
 
     float3 n = normalize(in.normal);
     float3 L = normalize(u.light.xyz);
     float d = max(dot(n, L), 0.0);
     int style = styleOf(u);
+    if (style == 3) {
+        // 黑金：陆地金箔（金属，高光带金色、边缘反射），海面钢琴漆（锐利白高光、边缘反暖光）
+        float3 V = normalize(u.eye.xyz - in.world);
+        float3 R = reflect(-L, n);
+        float rv = max(dot(R, V), 0.0);
+        float fres = pow(1.0 - saturate(dot(n, V)), 3.0);
+        // 近看时球面接近平面，高光会铺满屏幕；按高度减弱
+        float specK = smoothstep(0.15, 1.2, u.viewport.w);
+        if (cid != 0) {
+            float3 c = color * (0.38 + 0.58 * d);
+            c += color * pow(rv, 6.0) * 0.28 * specK;                       // 宽的金色光泽
+            c += float3(1.0, 0.92, 0.70) * pow(rv, 40.0) * 0.30 * specK;    // 窄的亮点
+            c = mix(c, float3(0.50, 0.38, 0.18), fres * 0.35);              // 边缘偏暗金
+            return float4(c, 1.0);
+        }
+        float3 c = color * (0.6 + 0.4 * d);
+        c += float3(1.0, 0.97, 0.92) * pow(rv, 90.0) * 0.38 * specK;       // 漆面高光，柔一些
+        c += float3(0.95, 0.80, 0.55) * pow(rv, 14.0) * 0.07 * specK;
+        c += float3(0.55, 0.42, 0.25) * fres * 0.35;                        // 边缘映出暖色环境
+        return float4(c, 1.0);
+    }
     if (style == 2) {
         // 复古皮面：边缘压暗显出球体，加一层暖色柔光
         float3 V = normalize(u.eye.xyz - in.world);
@@ -213,6 +235,17 @@ fragment float4 sky_fragment(SkyOut in [[stage_in]], constant Uniforms &u [[buff
     float3 rd = normalize(b.xyz / b.w - a.xyz / a.w);
     float t = max(-dot(ro, rd), 0.0);
     float closest = length(ro + rd * t);
+    if (styleOf(u) == 3) {
+        // 黑金：深暖黑，球后一圈很淡的暖光把球托出来
+        float4 a3 = u.invViewProj * float4(in.ndc, 0.0, 1.0);
+        float4 b3 = u.invViewProj * float4(in.ndc, 1.0, 1.0);
+        float3 rd3 = normalize(b3.xyz / b3.w - a3.xyz / a3.w);
+        float t3 = max(-dot(u.eye.xyz, rd3), 0.0);
+        float cl = length(u.eye.xyz + rd3 * t3);
+        float halo = exp(-max(cl - 1.0, 0.0) * 3.5);
+        float v = 1.0 - 0.18 * dot(in.ndc, in.ndc);
+        return float4((float3(0.045, 0.038, 0.032) + float3(0.20, 0.14, 0.07) * halo * 0.55) * v, 1.0);
+    }
     if (styleOf(u) == 2) {
         // 复古：暖灰桌面，四角微暗，不画大气光晕
         float v = 1.0 - 0.10 * dot(in.ndc, in.ndc);
@@ -238,6 +271,7 @@ struct LabelOut {
     float2 uv;
     float kind;
     float alpha;
+    float onLand;
 };
 
 vertex LabelOut label_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
@@ -251,6 +285,7 @@ vertex LabelOut label_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
     o.uv = mix(l.uv.xy, l.uv.zw, corner);
     o.kind = l.style.x;
     o.alpha = l.style.y;
+    o.onLand = l.style.z;
     return o;
 }
 
@@ -268,14 +303,30 @@ fragment float4 label_fragment(LabelOut in [[stage_in]], constant Uniforms &u [[
     float3 halo = terrain ? float3(0.02, 0.04, 0.06) : float3(1.0, 0.995, 0.985);
     float haloA = terrain ? 0.78 : 0.72;
     if (style == 2) {
-        // 复古：像烫印在皮面上，奶油色字配深棕描边；省名退一档
-        ink = in.kind > 0.5 ? float3(0.98, 0.90, 0.76) : float3(0.90, 0.78, 0.62);
-        halo = float3(0.24, 0.12, 0.06);
+        // 复古：陆地上奶油色字配深棕描边（像烫印）；海上深棕字配焦糖描边；省名退一档
+        if (in.onLand > 0.5) {
+            ink = in.kind > 0.5 ? float3(0.98, 0.90, 0.76) : float3(0.90, 0.78, 0.62);
+            halo = float3(0.24, 0.12, 0.06);
+        } else {
+            ink = float3(0.30, 0.15, 0.06);
+            halo = float3(0.86, 0.62, 0.38);
+        }
         haloA = 0.55;
+    }
+    if (style == 3) {
+        // 黑金：金面上深墨字配金色描边；黑海上反过来，金字配黑描边
+        if (in.onLand > 0.5) {
+            ink = in.kind > 0.5 ? float3(0.10, 0.07, 0.02) : float3(0.20, 0.14, 0.05);
+            halo = float3(0.86, 0.70, 0.38);
+        } else {
+            ink = float3(0.90, 0.74, 0.42);
+            halo = float3(0.02, 0.02, 0.02);
+        }
+        haloA = 0.6;
     }
     if (in.kind > 2.5) {
         // 海洋名：不要白边，颜色贴着海面
-        ink = style == 2 ? float3(0.42, 0.22, 0.10) : (terrain ? float3(0.70, 0.82, 0.94) : float3(0.30, 0.46, 0.60));
+        ink = style == 3 ? float3(0.86, 0.70, 0.40) : (style == 2 ? float3(0.42, 0.22, 0.10) : (terrain ? float3(0.70, 0.82, 0.94) : float3(0.30, 0.46, 0.60)));
         haloA = 0.0;
     }
     float a = max(fh.r, fh.g * haloA);

@@ -103,7 +103,8 @@ def slim(e):
 
 
 # ---------- 中文维基 ----------
-SECTION_KEYS = {"history": ("历史", "歷史", "沿革", "建制沿革"), "culture": ("文化", "风俗", "民俗", "饮食", "社会", "宗教", "旅游", "观光")}
+# 按优先级排：先找排在前面的关键词，找不到再往后。「社会」常是医保、治安，不算风土人情
+SECTION_KEYS = {"history": ("历史", "歷史", "沿革", "建制沿革"), "culture": ("文化", "民俗", "风俗", "饮食", "宗教", "旅游", "观光")}
 
 
 def wiki_text(title):
@@ -163,8 +164,10 @@ def sections(text):
 
 
 def section_snippet(text, keys, limit):
-    for title, body in sections(text):
-        if any(k in title for k in keys):
+    secs = sections(text)
+    ordered = [(t, b) for k in keys for t, b in secs if k in t]
+    for title, body in ordered:
+        if True:
             # 去掉三级标题行，取前几段
             body = "\n".join(l for l in body.split("\n") if not l.strip().startswith("==="))
             s = first_paragraphs(body, limit)

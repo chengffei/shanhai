@@ -3,9 +3,18 @@ import MetalKit
 import Observation
 
 enum MapMode: String, CaseIterable {
-    case political, terrain, vintage
+    case political, terrain, vintage, blackgold
+    var title: String { switch self { case .political: "普通"; case .terrain: "地形"; case .vintage: "复古"; case .blackgold: "黑金" } }
+    /// 面板里链接的颜色，跟着风格走
+    var linkColor: (Double, Double, Double) {
+        switch self {
+        case .vintage: (0.55, 0.32, 0.14)
+        case .blackgold: (0.60, 0.45, 0.12)
+        default: (0.0, 0.44, 0.92)
+        }
+    }
     /// 着色器里的风格编号
-    var styleIndex: Float { switch self { case .political: 0; case .terrain: 1; case .vintage: 2 } }
+    var styleIndex: Float { switch self { case .political: 0; case .terrain: 1; case .vintage: 2; case .blackgold: 3 } }
 }
 
 /// 地球的状态：相机、选中、悬停、模式。视图和面板都看它。
@@ -14,6 +23,15 @@ final class GlobeController {
     let geo: GeoData
     var camera = Camera() { didSet { if camera != oldValue { requestRedraw() } } }
     var mode: MapMode = .political { didSet { requestRedraw() } }
+    /// 切到复古、黑金且底图还在加载时为 true，界面上显示加载提示
+    var loadingStyle = false
+    /// 右侧面板占掉的宽度（点）。地球的投影中心左移一半，选中处留在可见区域中央
+    @ObservationIgnored var rightInset: Double = 0 {
+        didSet { if rightInset != oldValue { animating = true } }
+    }
+    @ObservationIgnored private(set) var currentInset: Double = 0
+    /// 搜索框获得焦点的请求（菜单 ⌘F 递增）
+    var searchRequest = 0
     var selectedRegion = 0 { didSet { requestRedraw() } }
     var selectedCountry = 0 { didSet { requestRedraw() } }
     var hoverRegion = 0
@@ -181,7 +199,10 @@ final class GlobeController {
         } else {
             velocity = .zero
         }
-        if flight == nil && velocity == .zero && animating {
+        // 面板留白平滑过渡
+        let diff = rightInset - currentInset
+        currentInset = abs(diff) < 0.5 ? rightInset : currentInset + diff * min(1, dt * 12)
+        if flight == nil && velocity == .zero && animating && currentInset == rightInset {
             DispatchQueue.main.async { self.animating = false }
         }
     }

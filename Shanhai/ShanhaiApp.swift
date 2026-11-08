@@ -20,6 +20,24 @@ struct ShanhaiApp: App {
             }
         }
         .defaultSize(width: 1280, height: 820)
+        .commands {
+            if let c = controller {
+                CommandMenu("地图") {
+                    Button("普通") { c.mode = .political }.keyboardShortcut("1")
+                    Button("地形") { c.mode = .terrain }.keyboardShortcut("2")
+                    Button("复古") { c.mode = .vintage }.keyboardShortcut("3")
+                    Button("黑金") { c.mode = .blackgold }.keyboardShortcut("4")
+                    Divider()
+                    Button("搜索…") { c.searchRequest += 1 }.keyboardShortcut("f")
+                    Button("回到整个地球") { c.home() }.keyboardShortcut("0")
+                    Button("3D 视角") { c.toggle3D() }.keyboardShortcut("d")
+                    Button("放大") { c.zoomAnimated(0.5) }.keyboardShortcut("=")
+                    Button("缩小") { c.zoomAnimated(2) }.keyboardShortcut("-")
+                    Divider()
+                    Button("关闭介绍") { c.clearSelection() }.keyboardShortcut(.escape, modifiers: [])
+                }
+            }
+        }
         .windowToolbarStyle(.unified(showsTitle: false))
     }
 }

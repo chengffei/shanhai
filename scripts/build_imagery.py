@@ -150,9 +150,50 @@ def vintage():
     compress(png, OUT / "vintage.ktx")
 
 
+def blackgold():
+    """黑金底图：钢琴漆黑海、金箔陆地（低频起伏加横向拉丝）、海岸深金描边、海上淡金经纬网"""
+    pol = np.asarray(Image.open(WORK / "political_16k.png").convert("RGB"))
+    land = ~((pol[..., 0] == 0xAA) & (pol[..., 1] == 0xD3) & (pol[..., 2] == 0xEC))
+    del pol
+    land_img = Image.fromarray((land * 255).astype(np.uint8))
+    rnd = np.random.default_rng(11)
+
+    def noise(shape_small, amp, resample=Image.BICUBIC):
+        n = rnd.standard_normal(shape_small).astype(np.float32)
+        im = Image.fromarray(((n * 40) + 128).clip(0, 255).astype(np.uint8)).resize((W, H), resample)
+        return (np.asarray(im, dtype=np.float32) - 128) / 40 * amp
+
+    # 金箔：大块明暗起伏 + 横向拉丝（宽而矮的噪声拉伸开）
+    foil = noise((64, 128), 5) + noise((256, 512), 2.5) + noise((2048, 256), 1.6)
+    out = np.empty((H, W, 3), dtype=np.float32)
+    out[:] = (10, 10, 12)
+    gold = np.array([200, 156, 70], np.float32)
+    g = gold[None, None, :] * (1 + foil[..., None] / 120)
+    out[land] = g[land]
+    del g, foil
+    # 海岸：陆地内侧一圈深金
+    inner = land & ~np.asarray(land_img.filter(ImageFilter.MinFilter(5)), dtype=bool)
+    out[inner] = out[inner] * 0.55
+    # 海上经纬网：淡金细线
+    grid = Image.new("L", (W, H), 0)
+    gd = ImageDraw.Draw(grid)
+    for lon in range(-180, 181, 15):
+        x = (lon + 180) / 360 * W
+        gd.line((x, 0, x, H), fill=255, width=3)
+    for lat in range(-75, 76, 15):
+        y = (90 - lat) / 180 * H
+        gd.line((0, y, W, y), fill=255, width=3)
+    gm = np.asarray(grid, dtype=np.float32) / 255 * 0.22
+    gm[land] = 0
+    out = out * (1 - gm[..., None]) + gold * gm[..., None]
+    png = WORK / "blackgold_16k.png"
+    Image.fromarray(out.clip(0, 255).astype(np.uint8)).save(png, compress_level=1)
+    compress(png, OUT / "blackgold.ktx")
+
+
 def main():
     WORK.mkdir(exist_ok=True)
-    what = sys.argv[1:] or ["physical", "political", "vintage"]
+    what = sys.argv[1:] or ["physical", "political", "vintage", "blackgold"]
     if "physical" in what:
         eq = to_equirect(stitch_mercator())
         png = WORK / "physical_16k.png"
@@ -162,6 +203,8 @@ def main():
         compress(WORK / "political_16k.png", OUT / "political.ktx")
     if "vintage" in what:
         vintage()
+    if "blackgold" in what:
+        blackgold()
 
 
 if __name__ == "__main__":

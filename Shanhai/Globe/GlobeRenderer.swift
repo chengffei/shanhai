@@ -37,19 +37,25 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
     private var reliefMesh: Mesh!      // 2048×1024：地形视图，约 20 km 一格
     private var political: MTLTexture!
     private var physical: MTLTexture?
-    private var vintage: MTLTexture?
-    private var vintageLoading = false
+    private var lazyTextures: [String: MTLTexture] = [:]
+    private var lazyLoading: Set<String> = []
     private let geoDir = Bundle.main.resourceURL!.appendingPathComponent("Geo")
 
-    /// 复古底图第一次用到时才后台加载（约 90 MB 显存）
-    private func vintageTexture() -> MTLTexture? {
-        if let vintage { return vintage }
-        if !vintageLoading {
-            vintageLoading = true
+    /// 复古、黑金底图第一次用到时才后台加载（各约 90 MB 显存）
+    private func lazyTexture(_ name: String) -> MTLTexture? {
+        if let t = lazyTextures[name] { return t }
+        if !lazyLoading.contains(name) {
+            lazyLoading.insert(name)
+            controller?.loadingStyle = true
             let loader = MTKTextureLoader(device: device), dir = geoDir
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                let t = try? GlobeRenderer.loadBase(loader, dir, "vintage")
-                DispatchQueue.main.async { self?.vintage = t; self?.controller?.requestRedraw(); malloc_zone_pressure_relief(nil, 0) }
+                let t = try? GlobeRenderer.loadBase(loader, dir, name)
+                DispatchQueue.main.async {
+                    self?.lazyTextures[name] = t
+                    self?.controller?.loadingStyle = false
+                    self?.controller?.requestRedraw()
+                    malloc_zone_pressure_relief(nil, 0)
+                }
             }
         }
         return nil
@@ -59,7 +65,8 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
     private func baseFor(_ mode: MapMode) -> (MTLTexture, Float) {
         switch mode {
         case .terrain: if let physical { return (physical, 1) }
-        case .vintage: if let v = vintageTexture() { return (v, 2) }
+        case .vintage: if let v = lazyTexture("vintage") { return (v, 2) }
+        case .blackgold: if let v = lazyTexture("blackgold") { return (v, 3) }
         case .political: break
         }
         return (political, 0)
@@ -285,7 +292,10 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
         let cam = controller.camera
         let size = view.drawableSize
         let scale = view.window?.backingScaleFactor ?? 2
-        let m = cam.matrices(aspect: size.width / max(size.height, 1))
+        var m = cam.matrices(aspect: size.width / max(size.height, 1))
+        // 面板打开时把投影中心左移半个面板宽：x_ndc 整体平移
+        let shift = -controller.currentInset * Double(scale) / Double(max(size.width, 1))
+        m.proj.columns.2.x = -shift
         let vp = m.proj * m.view
         invViewProj = vp.inverse
         eye = cam.frame.eye
@@ -340,10 +350,15 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
             enc.drawIndexedPrimitives(type: .lineStrip, indexCount: range.count, indexType: .uint32, indexBuffer: geo.borderIndices,
                                       indexBufferOffset: range.lowerBound * 4, instanceCount: width)
         }
-        let ink: SIMD3<Float> = terrain ? SIMD3(1, 1, 1) : (style == 2 ? SIMD3(0.28, 0.15, 0.08) : SIMD3(0.25, 0.27, 0.32))
-        lines(geo.regionLineRange, color: SIMD4(ink, u.params.y * (terrain ? 0.5 : (style == 2 ? 0.35 : 0.45))), width: 1)
-        lines(geo.countryLineRange, color: SIMD4(ink, terrain ? 0.75 : (style == 2 ? 0.5 : 0.6)), width: scale > 1 ? 2 : 1)
-        let accent = style == 2 ? SIMD4<Float>(1.0, 0.86, 0.58, 1.0) : SIMD4<Float>(0.0, 0.48, 1.0, 1.0)
+        let ink: SIMD3<Float>, regionA: Float, countryA: Float, accent: SIMD4<Float>
+        switch style {
+        case 1: ink = SIMD3(1, 1, 1); regionA = 0.5; countryA = 0.75; accent = SIMD4(0.0, 0.48, 1.0, 1)
+        case 2: ink = SIMD3(0.28, 0.15, 0.08); regionA = 0.35; countryA = 0.5; accent = SIMD4(1.0, 0.86, 0.58, 1)
+        case 3: ink = SIMD3(0.16, 0.11, 0.03); regionA = 0.30; countryA = 0.55; accent = SIMD4(1.0, 0.93, 0.72, 1)
+        default: ink = SIMD3(0.25, 0.27, 0.32); regionA = 0.45; countryA = 0.6; accent = SIMD4(0.0, 0.48, 1.0, 1)
+        }
+        lines(geo.regionLineRange, color: SIMD4(ink, u.params.y * regionA), width: 1)
+        lines(geo.countryLineRange, color: SIMD4(ink, countryA), width: scale > 1 ? 2 : 1)
         if let r = geo.region(controller.selectedRegion) {
             for o in r.outline { lines(o[0]..<(o[0] + o[1]), color: accent, width: 4) }
         } else if let c = geo.country(controller.selectedCountry) {
@@ -432,7 +447,9 @@ final class GlobeRenderer: NSObject, MTKViewDelegate {
             case .ocean, .sea: kind = 3
             default: kind = 2
             }
-            out[n] = LabelInstance(center: SIMD2(Float(x0 + w / 2), Float(y0 + h / 2)), size: SIMD2(Float(w), Float(h)), uv: e.uv, style: SIMD4(kind, 1, 0, 0))
+            // 标签落在陆地还是海上：复古、黑金按底色换字色
+            let onLand: Float = geo.lookup(lat: lat, lon: lon).country != 0 ? 1 : 0
+            out[n] = LabelInstance(center: SIMD2(Float(x0 + w / 2), Float(y0 + h / 2)), size: SIMD2(Float(w), Float(h)), uv: e.uv, style: SIMD4(kind, 1, onLand, 0))
             n += 1
             return true
         }

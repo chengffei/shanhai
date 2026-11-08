@@ -4,6 +4,9 @@ import ImageIO
 struct ContentView: View {
     @Bindable var controller: GlobeController
     @State private var query = ""
+    @FocusState private var searchFocused: Bool
+    /// 第一次选中过任何地方后不再显示引导
+    @AppStorage("hasSelectedOnce") private var hasSelectedOnce = false
 
     private var hasSelection: Bool { controller.selectedCountry != 0 || controller.selectedRegion != 0 }
 
@@ -19,6 +22,31 @@ struct ContentView: View {
             }
         }
         .animation(.smooth(duration: 0.25), value: hasSelection)
+        .onChange(of: hasSelection, initial: true) { _, open in
+            controller.rightInset = open ? 392 : 0
+            if open { hasSelectedOnce = true }
+        }
+        .overlay(alignment: .bottom) {
+            if !hasSelectedOnce && !hasSelection {
+                CoachMark { hasSelectedOnce = true }
+                    .padding(.bottom, 28)
+                    .transition(.opacity)
+            }
+        }
+        .overlay(alignment: .top) {
+            if controller.loadingStyle {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("正在准备\(controller.mode.title)底图…").font(.callout)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                .glassEffect(.regular, in: .capsule)
+                .padding(.top, 12)
+                .transition(.opacity)
+            }
+        }
+        .animation(.smooth(duration: 0.2), value: controller.loadingStyle)
+        .onChange(of: controller.searchRequest) { searchFocused = true }
         .overlay(alignment: .bottomLeading) { HoverName(controller: controller).padding(16) }
         .overlay(alignment: .bottomTrailing) {
             MapControls(controller: controller)
@@ -42,13 +70,15 @@ struct ContentView: View {
                     Text("普通").tag(MapMode.political)
                     Text("地形").tag(MapMode.terrain)
                     Text("复古").tag(MapMode.vintage)
+                    Text("黑金").tag(MapMode.blackgold)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 200)
-                .help("普通：按国家上色的政区图；地形：卫星影像加真实起伏；复古：焦糖皮面地球仪")
+                .frame(width: 260)
+                .help("普通：按国家上色的政区图；地形：卫星影像加立体浮雕；复古：焦糖皮面地球仪；黑金：黑漆金箔地球仪")
             }
         }
         .searchable(text: $query, placement: .toolbar, prompt: "搜索国家、省份或城市")
+        .searchFocused($searchFocused)
         .searchSuggestions {
             ForEach(SearchIndex.shared(controller.geo).find(query)) { hit in
                 Button { go(hit) } label: {
@@ -75,6 +105,22 @@ struct ContentView: View {
             controller.select(lat: lat, lon: lon)
         }
         query = ""
+    }
+}
+
+/// 第一次打开时的一句引导：告诉零基础的人能做什么
+struct CoachMark: View {
+    let dismiss: () -> Void
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "hand.tap").font(.system(size: 15, weight: .medium))
+            Text("点一下任意国家，看它的介绍；放大后可以点省份").font(.callout)
+            Button(action: dismiss) { Image(systemName: "xmark").font(.system(size: 10, weight: .bold)) }
+                .buttonStyle(.plain).foregroundStyle(.secondary)
+                .help("不再提示")
+        }
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .glassEffect(.regular, in: .capsule)
     }
 }
 

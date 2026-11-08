@@ -3,6 +3,7 @@ import SwiftUI
 struct InfoPanel: View {
     let controller: GlobeController
     @State private var store = ContentStore()
+    private var accent: Color { let c = controller.mode.linkColor; return Color(red: c.0, green: c.1, blue: c.2) }
 
     var body: some View {
         let geo = controller.geo
@@ -21,9 +22,9 @@ struct InfoPanel: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     if let f = content?.facts { FactsGrid(facts: f, isRegion: region != nil) }
-                    if let s = content?.summary, !s.isEmpty { section("简介") { Paragraphs(text: s) } }
-                    if let c = content?.culture { section("风土人情") { Paragraphs(text: c.text) } }
-                    if let h = content?.history { section("历史") { Paragraphs(text: h.text) } }
+                    if let s = content?.summary, !s.isEmpty { section("简介") { Paragraphs(text: s, accent: accent) } }
+                    if let c = content?.culture { section("风土人情") { Paragraphs(text: c.text, accent: accent) } }
+                    if let h = content?.history { section("历史") { Paragraphs(text: h.text, accent: accent) } }
                     if let ev = content?.events, !ev.isEmpty { section("发生在这里的大事") { EventList(events: ev) } }
                     if let pp = content?.people, !pp.isEmpty { section(region == nil ? "这个国家的名人" : "从这里走出的名人") { PeopleList(people: pp) } }
                     if content == nil {
@@ -54,7 +55,7 @@ struct InfoPanel: View {
                         Text("\(country.name)  ›").font(.callout.weight(.medium))
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(accent)
                     .help("看看\(country.name)整个国家")
                 } else if let country {
                     Text([country.continentZh, country.nameEn].filter { !$0.isEmpty }.joined(separator: "  ")).font(.callout).foregroundStyle(.secondary)
@@ -84,7 +85,7 @@ struct InfoPanel: View {
     private func footer(content: PlaceContent?) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             if let w = content?.wiki, let url = URL(string: "https://zh.wikipedia.org/wiki/" + (w.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? w)) {
-                Link("在维基百科阅读全文", destination: url).font(.footnote)
+                Link("在维基百科阅读全文", destination: url).font(.footnote).foregroundStyle(accent)
             }
             Text("内容整理自维基百科与 Wikidata，按 CC BY-SA 4.0 使用。").font(.footnote).foregroundStyle(.tertiary)
         }
@@ -98,12 +99,27 @@ extension Country {
     }
 }
 
+/// 长段落默认只露前 4 行，读者想看再展开；对零基础的人少一点压力
 struct Paragraphs: View {
     let text: String
+    var accent: Color = .accentColor
+    @State private var expanded = false
+    private var long: Bool { text.count > 140 }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(text.split(separator: "\n").enumerated()), id: \.offset) { _, p in
-                Text(String(p)).font(.body).lineSpacing(4).fixedSize(horizontal: false, vertical: true)
+            if expanded || !long {
+                ForEach(Array(text.split(separator: "\n").enumerated()), id: \.offset) { _, p in
+                    Text(String(p)).font(.body).lineSpacing(4).fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                Text(text.replacingOccurrences(of: "\n", with: " "))
+                    .font(.body).lineSpacing(4).lineLimit(4)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if long {
+                Button(expanded ? "收起" : "展开") { withAnimation(.smooth(duration: 0.2)) { expanded.toggle() } }
+                    .buttonStyle(.plain).font(.callout.weight(.medium)).foregroundStyle(accent)
             }
         }
     }
