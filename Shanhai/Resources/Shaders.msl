@@ -95,21 +95,39 @@ fragment float4 globe_fragment(GlobeOut in [[stage_in]],
         return float4(color * shade + float3(1.0, 0.86, 0.66) * spec, 1.0);
     }
     if (style == 1) {
-        // 地形：用高程算坡面法线，山有阴阳面；放大倍数与顶点位移一致
+        // 地形晕渲：光源固定在西北 45° 高（制图惯例），细、粗两个尺度的坡度叠加；
+        // 晕渲用的放大倍数是顶点位移的 4 倍，10 km 一格的高程在大尺度下才看得出坡
         constexpr sampler hs(filter::linear, address::repeat);
         float2 texel = 1.0 / float2(heightTex.get_width(), heightTex.get_height());
         float lat = PI * 0.5 - in.uv.y * PI;
-        float he = max(heightTex.sample(hs, in.uv + float2(texel.x, 0)).r, 0.0) - max(heightTex.sample(hs, in.uv - float2(texel.x, 0)).r, 0.0);
-        float hn = max(heightTex.sample(hs, in.uv - float2(0, texel.y)).r, 0.0) - max(heightTex.sample(hs, in.uv + float2(0, texel.y)).r, 0.0);
-        float dx = 2.0 * texel.x * 2.0 * PI * max(cos(lat), 0.05);   // 东西向间距（弧度）
-        float dy = 2.0 * texel.y * PI;
-        float3 east = normalize(float3(cos(in.uv.x * 2.0 * PI - PI), 0.0, -sin(in.uv.x * 2.0 * PI - PI)));
+        float lonr = in.uv.x * 2.0 * PI - PI;
+        float3 east = float3(cos(lonr), 0.0, -sin(lonr));
         float3 north = cross(n, east);
-        float k = u.params.x;                                        // 米 → 半径（含放大）
-        float3 nt = normalize(n - east * (he * k / dx) - north * (hn * k / dy));
-        float dt = max(dot(nt, L), 0.0);
-        float relief = mix(1.0, (0.35 + 0.8 * dt) / (0.35 + 0.8 * max(d, 0.25)), 0.85);
-        return float4(color * (0.62 + 0.45 * d) * relief, 1.0);
+        float k = max(u.params.x * 4.0, 30.0 / 6371000.0);   // 近景位移只放大 3 倍，晕渲至少按 30 倍算
+        auto H = [&](float2 o) { return max(heightTex.sample(hs, in.uv + o).r, 0.0); };
+        float3 nt = n;
+        // 细尺度（1 格）看山脊，粗尺度（6 格）看高原边缘、盆地外沿
+        for (int lvl = 0; lvl < 2; lvl++) {
+            float sstep = lvl == 0 ? 1.0 : 6.0;
+            float w = lvl == 0 ? 0.45 : 0.55;
+            float2 ox = float2(texel.x * sstep, 0), oy = float2(0, texel.y * sstep);
+            float he = H(ox) - H(-ox);
+            float hn = H(-oy) - H(oy);
+            float dx = 2.0 * ox.x * 2.0 * PI * max(cos(lat), 0.05);
+            float dy = 2.0 * oy.y * PI;
+            nt += w * (-east * (he * k / dx) - north * (hn * k / dy));
+        }
+        nt = normalize(nt);
+        float3 Ls = normalize(n * 0.72 + north * 0.49 - east * 0.49);   // 西北上方
+        float flat = dot(n, Ls);
+        float hill = clamp(dot(nt, Ls) / flat, 0.0, 2.0);
+        float relief = clamp(0.30 + 0.70 * hill, 0.42, 1.45);
+        // 海拔亮度：高原略亮、平原盆地略暗，帮助看出地势阶梯
+        float h = H(float2(0));
+        float alt = mix(0.93, 1.08, smoothstep(0.0, 4500.0, h));
+        float land = step(1.0, h);   // 海面不做晕渲
+        float3 lit = color * (0.62 + 0.45 * d);
+        return float4(mix(lit, lit * relief * alt, land), 1.0);
     }
     float shade = 0.86 + 0.16 * d;
     return float4(color * shade, 1.0);
