@@ -19,11 +19,19 @@ A native macOS globe in Chinese. Click any country or province to read about it.
 |---|---|---|
 | ![](docs/terrain.jpg) | ![](docs/monsoon.jpg) | ![](docs/vintage.jpg) |
 
-## 系统要求
+## 安装
 
-macOS 26，Apple 芯片。界面只有中文。
+需要 macOS 26 和 Apple 芯片。界面只有中文。
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/chengffei/shanhai/main/install.sh | bash
+```
+
+脚本会下载最新版，核对校验和与签名后装到「应用程序」。也可以在 [Releases](https://github.com/chengffei/shanhai/releases) 下载 dmg；App 没有经过 Apple 公证，第一次打开要在 Finder 里右键选「打开」。
 
 ## 构建
+
+需要 Xcode 26。
 
 仓库里有代码、着色器、内容和大部分地理数据。四张 16K 底图（`*.ktx`，每张约 90 MB）太大，不入库，要在本机生成：
 

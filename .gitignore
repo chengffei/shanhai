@@ -7,3 +7,4 @@ scripts/__pycache__/
 *.xcodeproj/
 Shanhai/Resources/Geo/*.ktx
 .DS_Store
+dist/
