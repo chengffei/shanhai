@@ -170,9 +170,10 @@ fragment float4 label_fragment(LabelOut in [[stage_in]], constant Uniforms &u [[
     float2 fh = atlas.sample(s, in.uv).rg;
     bool terrain = u.params.w > 0.5;
     // kind：0 省 1 国 2 城市
-    float3 ink = terrain ? float3(1.0) : (in.kind > 1.5 ? float3(0.16, 0.16, 0.18) : (in.kind > 0.5 ? float3(0.11, 0.11, 0.12) : float3(0.40, 0.40, 0.43)));
-    float3 halo = terrain ? float3(0.0) : float3(1.0);
-    float haloA = terrain ? 0.55 : 0.85;
+    // 国名深灰、城市近墨、省名中灰；白边略透，不压底图
+    float3 ink = terrain ? float3(1.0) : (in.kind > 1.5 ? float3(0.17, 0.17, 0.19) : (in.kind > 0.5 ? float3(0.26, 0.26, 0.29) : float3(0.43, 0.43, 0.46)));
+    float3 halo = terrain ? float3(0.0) : float3(1.0, 0.995, 0.985);
+    float haloA = terrain ? 0.45 : 0.72;
     float a = max(fh.r, fh.g * haloA);
     float3 c = mix(halo, ink, fh.r / max(a, 1e-4) * (fh.r > 0.0 ? 1.0 : 0.0));
     a *= in.alpha;

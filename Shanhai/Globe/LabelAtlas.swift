@@ -19,12 +19,14 @@ final class LabelAtlas {
     private var x = 0, y = 0, rowH = 0
     private(set) var generation = 0         // 清空过几次；用来让渲染器知道要重排
 
+    // 参照 Apple 地图：国名中等字重加字距，省名、城市名常规字重；粗体在地图上显得笨重
     private let fonts: [Style: NSFont] = [
-        .country: .systemFont(ofSize: 13, weight: .semibold),
+        .country: .systemFont(ofSize: 13, weight: .medium),
         .region: .systemFont(ofSize: 11, weight: .regular),
         .city: .systemFont(ofSize: 11, weight: .regular),
-        .capital: .systemFont(ofSize: 11.5, weight: .semibold),
+        .capital: .systemFont(ofSize: 11.5, weight: .medium),
     ]
+    private let tracking: [Style: CGFloat] = [.country: 1.0, .region: 0.6, .city: 0.2, .capital: 0.2]
     private static let pad: CGFloat = 3
     private static let dot: CGFloat = 9     // 城市标签左侧圆点占的宽度
 
@@ -51,8 +53,8 @@ final class LabelAtlas {
         let font = fonts[style]!
         let isCity = style == .city || style == .capital
         let pad = LabelAtlas.pad, s = LabelAtlas.scale
-        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: NSColor.white]))
-        let textW = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: NSColor.white, .kern: tracking[style] ?? 0]))
+        let textW = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)) - (tracking[style] ?? 0)   // 末字后的字距不算
         let lead = isCity ? LabelAtlas.dot : 0
         let wPt = ceil(textW + lead + pad * 2), hPt = ceil(font.ascender - font.descender + pad * 2)
         let wPx = Int(wPt * s), hPx = Int(hPt * s)
@@ -72,8 +74,8 @@ final class LabelAtlas {
         let baseX = pad + lead, baseY = pad - font.descender
         fill.textPosition = CGPoint(x: baseX, y: baseY)
         CTLineDraw(line, fill)
-        // 白边：每个字形描 3 点粗的边
-        halo.setLineWidth(3); halo.setLineJoin(.round)
+        // 白边：每个字形描 2 点粗的边（向外 1 点），够托住文字又不显臃肿
+        halo.setLineWidth(2); halo.setLineJoin(.round)
         for run in CTLineGetGlyphRuns(line) as! [CTRun] {
             let n = CTRunGetGlyphCount(run)
             var glyphs = [CGGlyph](repeating: 0, count: n), pos = [CGPoint](repeating: .zero, count: n)
@@ -94,7 +96,7 @@ final class LabelAtlas {
             let r: CGFloat = style == .capital ? 3.2 : 2.6
             let cx = pad + lead / 2 - 1, cy = hPt / 2
             fill.fillEllipse(in: CGRect(x: cx - r, y: cy - r, width: r * 2, height: r * 2))
-            halo.fillEllipse(in: CGRect(x: cx - r - 1.5, y: cy - r - 1.5, width: r * 2 + 3, height: r * 2 + 3))
+            halo.fillEllipse(in: CGRect(x: cx - r - 1, y: cy - r - 1, width: r * 2 + 2, height: r * 2 + 2))
             anchor = SIMD2(Float(cx), Float(hPt - cy))
         }
 
